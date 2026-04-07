@@ -8,14 +8,23 @@ scrapers can extend.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
+import sys
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import List, Optional
+
+# Playwright's sync API requires SelectorEventLoop on Windows (Python 3.8+).
+# Without this, Python 3.14 raises NotImplementedError from
+# ProactorEventLoop._make_subprocess_transport when Playwright tries to
+# spawn its browser driver subprocess from a non-main thread (e.g. Streamlit).
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
 from bs4 import BeautifulSoup
 
