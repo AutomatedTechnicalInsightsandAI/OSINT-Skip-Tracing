@@ -2,16 +2,18 @@
 Sarasota County Property Records scraper.
 
 Targets:
-  Clerk of Circuit Court: https://www.sarasotaclerk.com/
+  Clerk of Circuit Court: https://secure.sarasotaclerk.com/OfficialRecords.aspx
   Property Appraiser:     https://www.sc-pa.com/
 
-Sarasota uses the Fidlar/iDoc recording search for Official Records
-and a standard address/parcel search for property-appraiser data.
+Sarasota uses an ASP.NET WebForms Official Records search portal.
+Playwright is used to fill in and submit the search form before parsing
+the GridView results table.
 """
 
 from __future__ import annotations
 
 import logging
+from datetime import datetime, timedelta
 from typing import List
 
 from scrapers.base_scraper import (
@@ -27,7 +29,8 @@ logger = logging.getLogger(__name__)
 class SarasotaScraper(BaseScraper):
     """Scraper for Sarasota County, FL."""
 
-    CLERK_URL = "https://www.sarasotaclerk.com/official-records/"
+    # Bug 1 fix: use the correct ASP.NET search portal URL.
+    CLERK_URL = "https://secure.sarasotaclerk.com/OfficialRecords.aspx"
     PA_URL = "https://www.sc-pa.com/propertysearch/find"
 
     @property
@@ -61,54 +64,132 @@ class SarasotaScraper(BaseScraper):
         return []
 
     # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _search_official_records(
+        self,
+        page,
+        doc_type: str,
+        date_from: str,
+        date_to: str,
+    ) -> None:
+        """
+        Navigate to the Sarasota ASP.NET Official Records portal and submit a
+        search for *doc_type* within the given date range.
+
+        Bug 3 fix: actually fill in and submit the search form instead of just
+        reading the landing page HTML.
+        """
+        page.goto(self.CLERK_URL, wait_until="domcontentloaded")
+        self.sleep()
+        self.random_scroll(page)
+
+        try:
+            # Select document/instrument type
+            page.select_option("select[id*='DocType']", label=doc_type)
+        except Exception:
+            # Fall back to any visible doc-type dropdown if the ID varies
+            try:
+                page.select_option("select", label=doc_type)
+            except Exception as exc:
+                logger.warning(
+                    "Sarasota: could not select doc type '%s': %s",
+                    doc_type,
+                    repr(exc),
+                )
+
+        try:
+            # Fill start date
+            page.fill("input[id*='DateFrom']", date_from)
+        except Exception as exc:
+            logger.warning("Sarasota: could not fill DateFrom: %s", repr(exc))
+
+        try:
+            # Fill end date
+            page.fill("input[id*='DateTo']", date_to)
+        except Exception as exc:
+            logger.warning("Sarasota: could not fill DateTo: %s", repr(exc))
+
+        try:
+            # Click the Search / Submit button
+            page.click("input[type='submit'], button[type='submit']")
+            page.wait_for_load_state("networkidle")
+            self.sleep()
+        except Exception as exc:
+            logger.warning("Sarasota: form submit failed: %s", repr(exc))
+
+    def _parse_results(self, page) -> list[dict]:
+        """
+        Parse the ASP.NET GridView results table from the current page.
+
+        Bug 2 fix: replace the non-existent ``table.results-table`` selector
+        with a robust search for any GridView table, then fall back to the
+        first table on the page.
+        """
+        html = page.content()
+        soup = self.parse_html(html)
+
+        # Try to find a GridView table by its auto-generated id pattern first.
+        table = soup.find("table", id=lambda x: x and "Grid" in x)
+        if table is None:
+            # Fall back to the first <table> that contains <tr> rows with <td>
+            for t in soup.find_all("table"):
+                if t.find("td"):
+                    table = t
+                    break
+
+        rows_data: list[dict] = []
+        if table is None:
+            return rows_data
+
+        for tr in table.find_all("tr"):
+            cells = tr.find_all("td")
+            if len(cells) < 4:
+                continue
+            rows_data.append(
+                {
+                    "instrument_type": self.safe_text(cells[0]),
+                    "grantor": self.safe_text(cells[1]),
+                    "grantee": self.safe_text(cells[2]),
+                    "rec_date": self.safe_text(cells[3]),
+                    "book_page": self.safe_text(cells[4]) if len(cells) > 4 else "",
+                    "parcel_id": self.safe_text(cells[5]) if len(cells) > 5 else "",
+                }
+            )
+        return rows_data
+
+    # ------------------------------------------------------------------
     # Lead-type specific scrapers
     # ------------------------------------------------------------------
 
     def _fetch_flippers(self, max_results: int) -> List[PropertyRecord]:
         """
         Identify properties with ≥2 deed transfers within 12 months by
-        searching the Official Records for 'Warranty Deed' instrument type
-        and grouping by parcel.
+        searching for 'DEED' instrument type over the past 12 months.
         """
         records: List[PropertyRecord] = []
         try:
             page = self.new_page()
-            page.goto(self.CLERK_URL, wait_until="domcontentloaded")
-            self.sleep()
-            self.random_scroll(page)
 
-            # Navigate to the Official Records search form
-            page.goto(
-                "https://www.sarasotaclerk.com/official-records/",
-                wait_until="networkidle",
-            )
-            self.sleep()
+            date_to = datetime.now().strftime("%m/%d/%Y")
+            date_from = (datetime.now() - timedelta(days=365)).strftime("%m/%d/%Y")
 
-            html = page.content()
-            soup = self.parse_html(html)
+            self._search_official_records(page, "DEED", date_from, date_to)
 
-            # Parse deed records from the results table (site-specific selectors)
-            deed_rows = soup.select("table.results-table tr")
+            rows = self._parse_results(page)
+
             parcel_transfers: dict[str, list[dict]] = {}
-
-            for row in deed_rows:
-                cells = row.find_all("td")
-                if len(cells) < 5:
-                    continue
-                instrument_type = self.safe_text(cells[1])
+            for row in rows:
+                instrument_type = row["instrument_type"]
                 if "deed" not in instrument_type.lower():
                     continue
-
-                grantor = self.safe_text(cells[2])
-                grantee = self.safe_text(cells[3])
-                rec_date = self.safe_text(cells[4])
-                parcel_id = self.safe_text(cells[5]) if len(cells) > 5 else ""
-
+                parcel_id = row["parcel_id"] or row["book_page"] or row["grantor"]
                 parcel_transfers.setdefault(parcel_id, []).append(
                     {
-                        "date": rec_date,
-                        "grantor": grantor,
-                        "grantee": grantee,
+                        "date": row["rec_date"],
+                        "grantor": row["grantor"],
+                        "grantee": row["grantee"],
                         "deed_type": instrument_type,
                     }
                 )
@@ -134,41 +215,33 @@ class SarasotaScraper(BaseScraper):
 
             page.context.close()
         except Exception as exc:
-            logger.error("Sarasota flipper scrape failed: %s", exc)
+            logger.error("Sarasota flipper scrape failed: %s", repr(exc))
 
         logger.info("Sarasota flippers found: %d", len(records))
         return records
 
     def _fetch_high_interest(self, max_results: int) -> List[PropertyRecord]:
         """
-        Search for Mortgage Deeds recorded in 2022-2023 (peak rates) or
-        properties with no mortgage recorded in the last 20 years.
+        Search for Mortgage Deeds recorded in 2022-2023 (peak rates).
         """
         records: List[PropertyRecord] = []
         try:
             page = self.new_page()
-            # Search clerk records for Mortgage Deeds
-            page.goto(self.CLERK_URL, wait_until="domcontentloaded")
-            self.sleep()
 
-            html = page.content()
-            soup = self.parse_html(html)
+            self._search_official_records(
+                page, "MORTGAGE", "01/01/2022", "12/31/2023"
+            )
 
-            rows = soup.select("table.results-table tr")
+            rows = self._parse_results(page)
             for row in rows:
                 if len(records) >= max_results:
                     break
-                cells = row.find_all("td")
-                if len(cells) < 5:
-                    continue
-                instrument_type = self.safe_text(cells[1])
-                rec_date = self.safe_text(cells[4])
-
+                instrument_type = row["instrument_type"]
+                rec_date = row["rec_date"]
                 if not self.is_high_equity(rec_date, instrument_type):
                     continue
-
                 rec = PropertyRecord(
-                    owner_name=self.safe_text(cells[3]),
+                    owner_name=row["grantee"],
                     last_sale_date=rec_date,
                     estimated_interest_rate=estimate_interest_rate(rec_date),
                     deed_type=instrument_type,
@@ -180,7 +253,7 @@ class SarasotaScraper(BaseScraper):
 
             page.context.close()
         except Exception as exc:
-            logger.error("Sarasota high-interest scrape failed: %s", exc)
+            logger.error("Sarasota high-interest scrape failed: %s", repr(exc))
 
         logger.info("Sarasota high-interest found: %d", len(records))
         return records
@@ -192,38 +265,34 @@ class SarasotaScraper(BaseScraper):
         records: List[PropertyRecord] = []
         try:
             page = self.new_page()
-            page.goto(self.CLERK_URL, wait_until="domcontentloaded")
-            self.sleep()
 
-            html = page.content()
-            soup = self.parse_html(html)
-
-            rows = soup.select("table.results-table tr")
-            for row in rows:
+            for doc_type in ("SATISFACTION OF MORTGAGE", "CERTIFICATE OF TITLE"):
                 if len(records) >= max_results:
                     break
-                cells = row.find_all("td")
-                if len(cells) < 5:
-                    continue
-                instrument_type = self.safe_text(cells[1])
-
-                if not self.is_past_financing(instrument_type):
-                    continue
-
-                rec_date = self.safe_text(cells[4])
-                rec = PropertyRecord(
-                    owner_name=self.safe_text(cells[3]),
-                    last_sale_date=rec_date,
-                    estimated_interest_rate=estimate_interest_rate(rec_date),
-                    deed_type=instrument_type,
-                    county=self.county_name,
-                    lead_type=LeadType.PAST_FINANCING.value,
+                self._search_official_records(
+                    page, doc_type, "01/01/2020", "12/31/2024"
                 )
-                records.append(rec)
+                rows = self._parse_results(page)
+                for row in rows:
+                    if len(records) >= max_results:
+                        break
+                    instrument_type = row["instrument_type"]
+                    if not self.is_past_financing(instrument_type):
+                        continue
+                    rec_date = row["rec_date"]
+                    rec = PropertyRecord(
+                        owner_name=row["grantee"],
+                        last_sale_date=rec_date,
+                        estimated_interest_rate=estimate_interest_rate(rec_date),
+                        deed_type=instrument_type,
+                        county=self.county_name,
+                        lead_type=LeadType.PAST_FINANCING.value,
+                    )
+                    records.append(rec)
 
             page.context.close()
         except Exception as exc:
-            logger.error("Sarasota past-financing scrape failed: %s", exc)
+            logger.error("Sarasota past-financing scrape failed: %s", repr(exc))
 
         logger.info("Sarasota past-financing found: %d", len(records))
         return records
