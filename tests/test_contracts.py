@@ -261,9 +261,9 @@ def test_invoice_credits_applied(billing):
 @pytest.mark.parametrize(
     "total_leads, expected_rate",
     [
-        (50, 0.00),   # below 100
-        (100, 0.00),  # exactly 100 — no discount per spec
-        (250, 0.11),  # 250 threshold
+        (50, 0.00),   # below 100 — 0% per spec (Silver tier starts at 100 but also 0%)
+        (100, 0.00),  # exactly 100 — Silver tier, 0% discount per spec
+        (250, 0.11),  # Gold tier threshold
         (499, 0.11),  # just below 500
         (500, 0.22),  # 500 threshold
         (999, 0.22),  # just below 1000

@@ -257,7 +257,7 @@ class DisputeEngine:
                 lead_id=submission.lead_id,
                 decision="manual_review",
                 reason=(
-                    f"Unrecognised dispute reason '{submission.dispute_reason}' "
+                    f"Unrecognized dispute reason '{submission.dispute_reason}' "
                     "— escalated to manual review."
                 ),
                 credit_amount=0.0,

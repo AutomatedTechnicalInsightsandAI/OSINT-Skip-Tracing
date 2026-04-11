@@ -325,7 +325,7 @@ def _render_invoice_tab(df: pd.DataFrame) -> None:
         )
 
         # Register a minimal buyer record if not already registered
-        if buyer_id not in billing._buyers:
+        if not billing.has_buyer(buyer_id):
             billing.register_buyer(
                 buyer_id=buyer_id,
                 buyer_info={"company_name": buyer_id},

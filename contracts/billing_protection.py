@@ -77,6 +77,10 @@ class BillingProtection:
         """Add a credit balance for a buyer (e.g., from an approved dispute)."""
         self._credits[buyer_id] = self._credits.get(buyer_id, 0.0) + amount
 
+    def has_buyer(self, buyer_id: str) -> bool:
+        """Return True if *buyer_id* is registered in the system."""
+        return buyer_id in self._buyers
+
     def record_delivery(self, buyer_id: str, delivery: dict) -> None:
         """Record a completed lead delivery for billing and deduplication."""
         self._delivery_history.setdefault(buyer_id, []).append(delivery)
