@@ -8,10 +8,16 @@ Run with:
 
 from __future__ import annotations
 
-import asyncio
 import sys
 if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    import asyncio
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        try:
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        except AttributeError:
+            pass  # Python 3.16+ removed this, no longer needed
 
 import logging
 import traceback
@@ -26,6 +32,9 @@ from scrapers.sarasota_scraper import SarasotaScraper
 from utils.csv_exporter import CSVExporter
 from utils.data_processor import DataProcessor
 from ghl.ghl_streamlit_tab import render_ghl_tab
+from contracts.contracts_streamlit_tab import render_contracts_tab
+from financials.financial_streamlit_tab import render_financial_tab
+from ads.ad_streamlit_tab import render_ads_tab
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -227,85 +236,101 @@ def main():
 
     st.divider()
 
-    # ---- Controls ----
-    col_btn, col_info = st.columns([1, 3])
-    with col_btn:
-        generate = st.button(
-            "🚀 Generate Leads",
-            type="primary",
-            use_container_width=True,
-        )
+    # ---- Always-visible tabs ----
+    tab_leads, tab_ghl, tab_ads, tab_contracts, tab_financials = st.tabs([
+        "🔍 Lead Generator",
+        "📤 Push to GHL",
+        "📢 Ad Templates",
+        "📄 Contracts & Disputes",
+        "💰 Financial Model",
+    ])
 
-    with col_info:
-        st.markdown(
-            f"**Selected:** {', '.join(config['counties']) or 'None'} | "
-            f"**Lead type:** {config['lead_type'].value} | "
-            f"**Max per county:** {config['max_results']}"
-        )
-
-    # ---- Results area (persisted in session state) ----
-    if "results_df" not in st.session_state:
-        st.session_state["results_df"] = pd.DataFrame()
-
-    if generate:
-        st.session_state["results_df"] = run_scrapers(config)
-
-    df: pd.DataFrame = st.session_state["results_df"]
-
-    if df.empty:
-        st.info(
-            "Click **🚀 Generate Leads** to start scraping. "
-            "Results will appear here."
-        )
-        return
-
-    # ---- Tabs ----
-    tab_results, tab_ghl = st.tabs(["📋 Results", "📤 Push to GHL"])
-
-    with tab_results:
-        # ---- Metrics ----
-        st.subheader("📊 Results")
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Total Records", len(df))
-        email_col = "Scraped Emails"
-        emails_found = int(df[email_col].astype(bool).sum()) if email_col in df.columns else 0
-        m2.metric("Records with Emails", emails_found)
-        counties_col = "County"
-        county_count = df[counties_col].nunique() if counties_col in df.columns else 0
-        m3.metric("Counties Scraped", county_count)
-
-        # ---- Data table ----
-        st.dataframe(
-            df,
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        # ---- Download ----
-        st.divider()
-        csv_bytes = CSVExporter.to_bytes(df)
-        st.download_button(
-            label="⬇️ Download CSV",
-            data=csv_bytes,
-            file_name="prime_coastal_leads.csv",
-            mime="text/csv",
-            type="secondary",
-            use_container_width=False,
-        )
-
-        # ---- Per-county breakdown ----
-        if counties_col in df.columns and df[counties_col].nunique() > 1:
-            st.subheader("County Breakdown")
-            breakdown = (
-                df.groupby(counties_col)
-                .size()
-                .reset_index(name="Records")
-                .sort_values("Records", ascending=False)
+    with tab_leads:
+        # ---- Controls ----
+        col_btn, col_info = st.columns([1, 3])
+        with col_btn:
+            generate = st.button(
+                "🚀 Generate Leads",
+                type="primary",
+                use_container_width=True,
             )
-            st.bar_chart(breakdown.set_index(counties_col))
+
+        with col_info:
+            st.markdown(
+                f"**Selected:** {', '.join(config['counties']) or 'None'} | "
+                f"**Lead type:** {config['lead_type'].value} | "
+                f"**Max per county:** {config['max_results']}"
+            )
+
+        # ---- Results area (persisted in session state) ----
+        if "results_df" not in st.session_state:
+            st.session_state["results_df"] = pd.DataFrame()
+
+        if generate:
+            st.session_state["results_df"] = run_scrapers(config)
+
+        df: pd.DataFrame = st.session_state["results_df"]
+
+        if df.empty:
+            st.info(
+                "Click **🚀 Generate Leads** to start scraping. "
+                "Results will appear here."
+            )
+        else:
+            # ---- Metrics ----
+            st.subheader("📊 Results")
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Total Records", len(df))
+            email_col = "Scraped Emails"
+            emails_found = int(df[email_col].astype(bool).sum()) if email_col in df.columns else 0
+            m2.metric("Records with Emails", emails_found)
+            counties_col = "County"
+            county_count = df[counties_col].nunique() if counties_col in df.columns else 0
+            m3.metric("Counties Scraped", county_count)
+
+            # ---- Data table ----
+            st.dataframe(
+                df,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            # ---- Download ----
+            st.divider()
+            csv_bytes = CSVExporter.to_bytes(df)
+            st.download_button(
+                label="⬇️ Download CSV",
+                data=csv_bytes,
+                file_name="prime_coastal_leads.csv",
+                mime="text/csv",
+                type="secondary",
+                use_container_width=False,
+            )
+
+            # ---- Per-county breakdown ----
+            if counties_col in df.columns and df[counties_col].nunique() > 1:
+                st.subheader("County Breakdown")
+                breakdown = (
+                    df.groupby(counties_col)
+                    .size()
+                    .reset_index(name="Records")
+                    .sort_values("Records", ascending=False)
+                )
+                st.bar_chart(breakdown.set_index(counties_col))
+
+    df = st.session_state.get("results_df", pd.DataFrame())
 
     with tab_ghl:
         render_ghl_tab(df)
+
+    with tab_ads:
+        render_ads_tab(df)
+
+    with tab_contracts:
+        render_contracts_tab(df)
+
+    with tab_financials:
+        render_financial_tab(df)
 
 
 if __name__ == "__main__":
