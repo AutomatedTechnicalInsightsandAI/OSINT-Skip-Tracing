@@ -42,8 +42,8 @@ _VERTICAL_CATEGORY: dict[str, str] = {
 }
 
 # Assumed click-through and conversion rates for estimations
-_BENCHMARK_CTR: float = 0.05        # 5 % Google CTR
-_BENCHMARK_CVR: float = 0.08        # 8 % landing page CVR
+_BENCHMARK_CTR: float = 0.05        # 5% Google CTR
+_BENCHMARK_CVR: float = 0.08        # 8% landing page CVR
 _COST_PER_IMPRESSION: float = 0.01  # $10 CPM equivalent
 
 
