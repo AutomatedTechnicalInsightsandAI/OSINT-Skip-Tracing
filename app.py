@@ -25,6 +25,7 @@ from scrapers.miami_dade_scraper import MiamiDadeScraper
 from scrapers.sarasota_scraper import SarasotaScraper
 from utils.csv_exporter import CSVExporter
 from utils.data_processor import DataProcessor
+from ghl.ghl_streamlit_tab import render_ghl_tab
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -258,46 +259,53 @@ def main():
         )
         return
 
-    # ---- Metrics ----
-    st.subheader("📊 Results")
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Total Records", len(df))
-    email_col = "Scraped Emails"
-    emails_found = int(df[email_col].astype(bool).sum()) if email_col in df.columns else 0
-    m2.metric("Records with Emails", emails_found)
-    counties_col = "County"
-    county_count = df[counties_col].nunique() if counties_col in df.columns else 0
-    m3.metric("Counties Scraped", county_count)
+    # ---- Tabs ----
+    tab_results, tab_ghl = st.tabs(["📋 Results", "📤 Push to GHL"])
 
-    # ---- Data table ----
-    st.dataframe(
-        df,
-        use_container_width=True,
-        hide_index=True,
-    )
+    with tab_results:
+        # ---- Metrics ----
+        st.subheader("📊 Results")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Total Records", len(df))
+        email_col = "Scraped Emails"
+        emails_found = int(df[email_col].astype(bool).sum()) if email_col in df.columns else 0
+        m2.metric("Records with Emails", emails_found)
+        counties_col = "County"
+        county_count = df[counties_col].nunique() if counties_col in df.columns else 0
+        m3.metric("Counties Scraped", county_count)
 
-    # ---- Download ----
-    st.divider()
-    csv_bytes = CSVExporter.to_bytes(df)
-    st.download_button(
-        label="⬇️ Download CSV",
-        data=csv_bytes,
-        file_name="prime_coastal_leads.csv",
-        mime="text/csv",
-        type="secondary",
-        use_container_width=False,
-    )
-
-    # ---- Per-county breakdown ----
-    if counties_col in df.columns and df[counties_col].nunique() > 1:
-        st.subheader("County Breakdown")
-        breakdown = (
-            df.groupby(counties_col)
-            .size()
-            .reset_index(name="Records")
-            .sort_values("Records", ascending=False)
+        # ---- Data table ----
+        st.dataframe(
+            df,
+            use_container_width=True,
+            hide_index=True,
         )
-        st.bar_chart(breakdown.set_index(counties_col))
+
+        # ---- Download ----
+        st.divider()
+        csv_bytes = CSVExporter.to_bytes(df)
+        st.download_button(
+            label="⬇️ Download CSV",
+            data=csv_bytes,
+            file_name="prime_coastal_leads.csv",
+            mime="text/csv",
+            type="secondary",
+            use_container_width=False,
+        )
+
+        # ---- Per-county breakdown ----
+        if counties_col in df.columns and df[counties_col].nunique() > 1:
+            st.subheader("County Breakdown")
+            breakdown = (
+                df.groupby(counties_col)
+                .size()
+                .reset_index(name="Records")
+                .sort_values("Records", ascending=False)
+            )
+            st.bar_chart(breakdown.set_index(counties_col))
+
+    with tab_ghl:
+        render_ghl_tab(df)
 
 
 if __name__ == "__main__":
