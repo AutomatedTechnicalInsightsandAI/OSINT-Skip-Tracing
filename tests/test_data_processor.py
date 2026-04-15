@@ -29,6 +29,14 @@ def _make_records(n: int = 3) -> list[PropertyRecord]:
             scraped_emails="",
             county="Sarasota",
             lead_type=LeadType.FLIPPER.value,
+            sale_price="250000",
+            just_value="500000",
+            assessed_value="350000",
+            taxable_value="340000",
+            mtg_amt_at_purchase="200000",
+            year_built="1975",
+            property_type="Condominium",
+            vacant_improved="V",
         )
         for i in range(1, n + 1)
     ]
@@ -62,6 +70,9 @@ def test_process_required_columns_present(processor_no_skip):
         "Last Sale Date",
         "Estimated Interest Rate",
         "Scraped Emails",
+        "Est Equity Pct",
+        "Absentee Owner",
+        "Lead Score",
     ]
     for col in required:
         assert col in df.columns, f"Missing required column: {col}"
@@ -81,6 +92,16 @@ def test_process_data_values_preserved(processor_no_skip):
     df = processor_no_skip.process(records)
     assert df.iloc[0]["Owner Name"] == "Owner 1"
     assert df.iloc[0]["Last Sale Date"] == "06/15/2023"
+    assert df.iloc[0]["Mtg Amt At Purchase"] == "200000"
+
+
+def test_process_adds_equity_and_flags(processor_no_skip):
+    records = _make_records(1)
+    df = processor_no_skip.process(records)
+    row = df.iloc[0]
+    assert pytest.approx(row["Est Equity Pct"], 0.0001) == 0.6
+    assert bool(row["Absentee Owner"]) is True
+    assert bool(row["DSCR Prospect"]) is True
 
 
 # ---------------------------------------------------------------------------

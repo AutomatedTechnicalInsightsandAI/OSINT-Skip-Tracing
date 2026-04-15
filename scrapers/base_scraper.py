@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+import re
 import sys
 import time
 from abc import ABC, abstractmethod
@@ -55,6 +56,16 @@ class PropertyRecord:
     parcel_id: str = ""
     deed_type: str = ""
     sale_price: str = ""
+    just_value: str = ""
+    assessed_value: str = ""
+    taxable_value: str = ""
+    mtg_amt_at_purchase: str = ""
+    mtg_amt_source: str = ""
+    year_built: str = ""
+    property_type: str = ""
+    vacant_improved: str = ""
+    absentee_owner: str = ""
+    lead_source: str = "OSINT Scraper"
     notes: str = ""
 
     def to_dict(self) -> dict:
@@ -71,6 +82,16 @@ class PropertyRecord:
             "Parcel ID": self.parcel_id,
             "Deed Type": self.deed_type,
             "Sale Price": self.sale_price,
+            "Just Value": self.just_value,
+            "Assessed Value": self.assessed_value,
+            "Taxable Value": self.taxable_value,
+            "Mtg Amt At Purchase": self.mtg_amt_at_purchase,
+            "Mtg Amt Source": self.mtg_amt_source,
+            "Year Built": self.year_built,
+            "Property Type": self.property_type,
+            "VI": self.vacant_improved,
+            "Absentee Owner": self.absentee_owner,
+            "Lead Source": self.lead_source,
             "Notes": self.notes,
         }
 
@@ -310,6 +331,11 @@ class BaseScraper(ABC):
         if element is None:
             return ""
         return element.get_text(separator=" ", strip=True)
+
+    @staticmethod
+    def normalize_parcel_id(parcel_id: str) -> str:
+        """Return a digit-only parcel/tax ID so county folio variants compare cleanly."""
+        return re.sub(r"\D", "", (parcel_id or "").strip())
 
     # ------------------------------------------------------------------
     # Lead filtering helpers

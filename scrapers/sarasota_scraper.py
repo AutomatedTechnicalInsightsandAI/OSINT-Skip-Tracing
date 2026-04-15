@@ -15,6 +15,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 from typing import List
+import requests
 
 from scrapers.base_scraper import (
     BaseScraper,
@@ -32,6 +33,7 @@ class SarasotaScraper(BaseScraper):
     # Bug 1 fix: use the correct ASP.NET search portal URL.
     CLERK_URL = "https://secure.sarasotaclerk.com/OfficialRecords.aspx"
     PA_URL = "https://www.sc-pa.com/propertysearch/find"
+    PA_PARCEL_URL = "https://www.sc-pa.com/propertysearch/parcel/details/{parcel_id}"
 
     @property
     def county_name(self) -> str:
@@ -159,6 +161,205 @@ class SarasotaScraper(BaseScraper):
             )
         return rows_data
 
+    @staticmethod
+    def _clean_currency(value: str) -> str:
+        return (value or "").replace("$", "").replace(",", "").strip()
+
+    @staticmethod
+    def _safe_join(lines: list[str]) -> str:
+        return ", ".join([line.strip(" ,") for line in lines if line.strip(" ,")])
+
+    def _fetch_pa_details(self, parcel_id: str) -> dict:
+        """
+        Pull supplemental parcel details from the Sarasota Property Appraiser.
+
+        The PA site exposes the last recorded consideration (sale price proxy),
+        values, owner/mailing data, situs address, and year built. It does not
+        expose a queryable mortgage amount field, so any mortgage value derived
+        here is explicitly a proxy.
+        """
+        normalized_id = self.normalize_parcel_id(parcel_id)
+        if not normalized_id:
+            return {}
+
+        url = self.PA_PARCEL_URL.format(parcel_id=normalized_id)
+        try:
+            resp = requests.get(
+                url,
+                timeout=20,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/122.0.0.0 Safari/537.36"
+                    )
+                },
+            )
+            resp.raise_for_status()
+        except Exception as exc:
+            logger.warning(
+                "Sarasota PA lookup failed for parcel %s: %s",
+                normalized_id,
+                repr(exc),
+            )
+            return {}
+
+        soup = self.parse_html(resp.text)
+        details: dict[str, str] = {"parcel_id": normalized_id, "pa_detail_url": url}
+
+        left_items = [
+            self.safe_text(li) for li in soup.select("ul.resultl.spaced li")
+        ]
+        owner_lines: list[str] = []
+        mailing_lines: list[str] = []
+        current_section = None
+        for item in left_items:
+            lower = item.lower()
+            if "ownership:" in lower:
+                current_section = "ownership"
+                continue
+            if "situs address:" in lower:
+                current_section = "situs"
+                continue
+            if "change mailing address" in lower:
+                continue
+            if current_section == "ownership":
+                if item and any(char.isdigit() for char in item):
+                    mailing_lines.append(item)
+                    current_section = "mailing"
+                    continue
+                if item:
+                    owner_lines.append(item)
+                continue
+            if current_section == "mailing":
+                if item:
+                    mailing_lines.append(item)
+                continue
+            if current_section == "situs":
+                details["property_address"] = item
+                continue
+            if item:
+                mailing_lines.append(item)
+
+        if owner_lines:
+            details["owner_name"] = " & ".join(owner_lines)
+        if mailing_lines:
+            details["mailing_address"] = self._safe_join(mailing_lines)
+
+        for li in soup.select("ul.resultr.spaced li"):
+            strong = li.find("strong")
+            label = self.safe_text(strong).rstrip(":").lower() if strong else ""
+            text = self.safe_text(li)
+            value = text.replace(self.safe_text(strong), "", 1).strip(" :") if strong else text
+            if label == "property use":
+                details["property_type"] = value
+            elif label == "land area":
+                details["land_area"] = value
+
+        for table in soup.find_all("table"):
+            headers = [self.safe_text(th) for th in table.find_all("th")]
+            if not headers:
+                continue
+
+            if headers[:5] == [
+                "Year",
+                "Land",
+                "Building",
+                "Extra Feature",
+                "Just",
+            ]:
+                row = table.find("tbody").find("tr") if table.find("tbody") else None
+                if row:
+                    cells = [self.safe_text(td) for td in row.find_all("td")]
+                    if len(cells) >= 8:
+                        details["just_value"] = self._clean_currency(cells[4])
+                        details["assessed_value"] = self._clean_currency(cells[5])
+                        details["taxable_value"] = self._clean_currency(cells[7])
+
+            elif headers[:6] == [
+                "Transfer Date",
+                "Recorded Consideration",
+                "Instrument Number",
+                "Qualification Code",
+                "Grantor/Seller",
+                "Instrument Type",
+            ]:
+                row = table.find("tbody").find("tr") if table.find("tbody") else None
+                if row:
+                    cells = [self.safe_text(td) for td in row.find_all("td")]
+                    if len(cells) >= 6:
+                        details["last_sale_date"] = cells[0]
+                        details["sale_price"] = self._clean_currency(cells[1])
+                        details["instrument_number"] = cells[2]
+                        details["seller_name"] = cells[4]
+                        details["sale_instrument_type"] = cells[5]
+                        if details["sale_price"]:
+                            try:
+                                sale_price = float(details["sale_price"])
+                                details["mtg_amt_at_purchase"] = str(int(round(sale_price * 0.80)))
+                                details["mtg_amt_source"] = (
+                                    "Proxy: 80% of Sarasota PA recorded consideration"
+                                )
+                            except ValueError:
+                                pass
+
+            elif headers[:6] == [
+                "Situs - click address for building details",
+                "Bldg #",
+                "Beds",
+                "Baths",
+                "Half Baths",
+                "Year Built",
+            ]:
+                row = table.find("tbody").find("tr") if table.find("tbody") else None
+                if row:
+                    cells = [self.safe_text(td) for td in row.find_all("td")]
+                    if len(cells) >= 6:
+                        details["year_built"] = cells[5]
+
+        mailing = details.get("mailing_address", "")
+        situs = details.get("property_address", "")
+        if mailing and situs:
+            details["absentee_owner"] = str(
+                self._normalize_address(mailing) != self._normalize_address(situs)
+            )
+
+        return details
+
+    @staticmethod
+    def _normalize_address(value: str) -> str:
+        return " ".join((value or "").upper().replace(",", " ").split())
+
+    def _enrich_record_from_pa(self, record: PropertyRecord) -> PropertyRecord:
+        details = self._fetch_pa_details(record.parcel_id)
+        if not details:
+            return record
+
+        record.parcel_id = details.get("parcel_id", record.parcel_id)
+        record.owner_name = details.get("owner_name", record.owner_name)
+        record.property_address = details.get("property_address", record.property_address)
+        record.mailing_address = details.get("mailing_address", record.mailing_address)
+        record.sale_price = details.get("sale_price", record.sale_price)
+        record.just_value = details.get("just_value", record.just_value)
+        record.assessed_value = details.get("assessed_value", record.assessed_value)
+        record.taxable_value = details.get("taxable_value", record.taxable_value)
+        record.mtg_amt_at_purchase = details.get(
+            "mtg_amt_at_purchase", record.mtg_amt_at_purchase
+        )
+        record.mtg_amt_source = details.get("mtg_amt_source", record.mtg_amt_source)
+        record.year_built = details.get("year_built", record.year_built)
+        record.property_type = details.get("property_type", record.property_type)
+        record.absentee_owner = details.get("absentee_owner", record.absentee_owner)
+
+        if not record.last_sale_date:
+            record.last_sale_date = details.get("last_sale_date", record.last_sale_date)
+
+        notes = [record.notes] if record.notes else []
+        if record.mtg_amt_source:
+            notes.append(record.mtg_amt_source)
+        record.notes = " | ".join(dict.fromkeys([note for note in notes if note]))
+        return record
+
     # ------------------------------------------------------------------
     # Lead-type specific scrapers
     # ------------------------------------------------------------------
@@ -185,6 +386,7 @@ class SarasotaScraper(BaseScraper):
                 if "deed" not in instrument_type.lower():
                     continue
                 parcel_id = row["parcel_id"] or row["book_page"] or row["grantor"]
+                parcel_id = self.normalize_parcel_id(parcel_id) or parcel_id
                 parcel_transfers.setdefault(parcel_id, []).append(
                     {
                         "date": row["rec_date"],
@@ -211,6 +413,7 @@ class SarasotaScraper(BaseScraper):
                         lead_type=LeadType.FLIPPER.value,
                         notes="2+ transfers within 12 months",
                     )
+                    rec = self._enrich_record_from_pa(rec)
                     records.append(rec)
 
             page.context.close()
@@ -242,6 +445,7 @@ class SarasotaScraper(BaseScraper):
                     continue
                 rec = PropertyRecord(
                     owner_name=row["grantee"],
+                    parcel_id=self.normalize_parcel_id(row.get("parcel_id", "")),
                     last_sale_date=rec_date,
                     estimated_interest_rate=estimate_interest_rate(rec_date),
                     deed_type=instrument_type,
@@ -249,6 +453,7 @@ class SarasotaScraper(BaseScraper):
                     lead_type=LeadType.HIGH_INTEREST.value,
                     notes="Peak-rate mortgage or no mortgage >20 years",
                 )
+                rec = self._enrich_record_from_pa(rec)
                 records.append(rec)
 
             page.context.close()
@@ -282,12 +487,14 @@ class SarasotaScraper(BaseScraper):
                     rec_date = row["rec_date"]
                     rec = PropertyRecord(
                         owner_name=row["grantee"],
+                        parcel_id=self.normalize_parcel_id(row.get("parcel_id", "")),
                         last_sale_date=rec_date,
                         estimated_interest_rate=estimate_interest_rate(rec_date),
                         deed_type=instrument_type,
                         county=self.county_name,
                         lead_type=LeadType.PAST_FINANCING.value,
                     )
+                    rec = self._enrich_record_from_pa(rec)
                     records.append(rec)
 
             page.context.close()

@@ -265,7 +265,7 @@ def main():
     with tab_results:
         # ---- Metrics ----
         st.subheader("📊 Results")
-        m1, m2, m3 = st.columns(3)
+        m1, m2, m3, m4 = st.columns(4)
         m1.metric("Total Records", len(df))
         email_col = "Scraped Emails"
         emails_found = int(df[email_col].astype(bool).sum()) if email_col in df.columns else 0
@@ -273,10 +273,21 @@ def main():
         counties_col = "County"
         county_count = df[counties_col].nunique() if counties_col in df.columns else 0
         m3.metric("Counties Scraped", county_count)
+        absentee_col = "Absentee Owner"
+        absentee_count = int(df[absentee_col].fillna(False).astype(bool).sum()) if absentee_col in df.columns else 0
+        m4.metric("Absentee Owners", absentee_count)
+
+        display_df = df.copy()
+        if "Est Equity Pct" in display_df.columns:
+            display_df = display_df.sort_values(
+                by="Est Equity Pct",
+                ascending=False,
+                na_position="last",
+            )
 
         # ---- Data table ----
         st.dataframe(
-            df,
+            display_df,
             use_container_width=True,
             hide_index=True,
         )

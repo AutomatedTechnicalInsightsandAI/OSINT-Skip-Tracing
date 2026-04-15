@@ -53,6 +53,10 @@ def test_property_record_to_dict_keys():
         "Last Sale Date",
         "Estimated Interest Rate",
         "Scraped Emails",
+        "Just Value",
+        "Assessed Value",
+        "Mtg Amt At Purchase",
+        "Absentee Owner",
     ]
     for col in required:
         assert col in d, f"Missing required column: {col}"
@@ -63,6 +67,10 @@ def test_property_record_to_dict_values():
     d = rec.to_dict()
     assert d["Owner Name"] == "Jane Doe"
     assert d["County"] == "Broward"
+
+
+def test_normalize_parcel_id_removes_dashes():
+    assert BaseScraper.normalize_parcel_id("00-5803-0005") == "0058030005"
 
 
 # ---------------------------------------------------------------------------
