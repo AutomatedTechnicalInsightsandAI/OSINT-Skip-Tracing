@@ -164,6 +164,9 @@ class DataProcessor:
         recent_sale = sale_dates.apply(
             lambda value: pd.notna(value) and value >= pd.Timestamp("2022-01-01")
         )
+        recent_purchase = sale_dates.apply(
+            lambda value: pd.notna(value) and value >= today - pd.Timedelta(days=183)
+        )
         dscr_window = sale_dates.apply(
             lambda value: pd.notna(value)
             and pd.Timestamp("2022-01-01") <= value <= pd.Timestamp("2023-12-31")
@@ -172,17 +175,21 @@ class DataProcessor:
             lambda value: pd.notna(value) and value <= today - pd.Timedelta(days=365 * 20)
         )
 
+        confirmed_zero_mortgage = mtg.notna() & mtg.eq(0)
         fix_flip_flag = (
             ((vi == "V") & sale_price.notna() & just.notna() & (sale_price < (just * 0.8)))
             | (year_built.notna() & (year_built < 1980) & just.notna() & assessed.notna() & (just > assessed * 1.2))
         )
         dscr_flag = mtg.gt(0) & dscr_window
         equity_rich_flag = mtg.fillna(0).le(0) & old_hold
+        cashout_refi_flag = recent_purchase & sale_price.fillna(0).ge(250000) & confirmed_zero_mortgage
 
         df["Fix & Flip Candidate"] = fix_flip_flag
         df["DSCR Prospect"] = dscr_flag
         df["Equity Rich Candidate"] = equity_rich_flag
         df["Recent Sale Candidate"] = recent_sale
+        df["Recent Purchase Candidate"] = recent_purchase
+        df["Cash-Out Refi Candidate"] = cashout_refi_flag
 
         df["Lead Strategy"] = df.apply(self._pick_lead_strategy, axis=1)
         df["Lead Score"] = df.apply(self._score_lead, axis=1)
@@ -193,6 +200,8 @@ class DataProcessor:
 
     @staticmethod
     def _pick_lead_strategy(row: pd.Series) -> str:
+        if bool(row.get("Cash-Out Refi Candidate", False)):
+            return LeadType.CASHOUT_REFI.value
         if bool(row.get("DSCR Prospect", False)):
             return LeadType.HIGH_INTEREST.value
         if bool(row.get("Equity Rich Candidate", False)):
@@ -206,6 +215,10 @@ class DataProcessor:
         score = 25
         if bool(row.get("Absentee Owner", False)):
             score += 15
+        if bool(row.get("Recent Purchase Candidate", False)):
+            score += 10
+        if bool(row.get("Cash-Out Refi Candidate", False)):
+            score += 30
         if bool(row.get("Fix & Flip Candidate", False)):
             score += 20
         if bool(row.get("DSCR Prospect", False)):
@@ -219,6 +232,10 @@ class DataProcessor:
 
         just_value = DataProcessor._to_number(row.get("Just Value", ""))
         if pd.notna(just_value) and just_value >= 500000:
+            score += 5
+
+        sale_price = DataProcessor._to_number(row.get("Sale Price", ""))
+        if pd.notna(sale_price) and sale_price >= 500000:
             score += 5
 
         return max(0, min(score, 100))
@@ -302,6 +319,8 @@ class DataProcessor:
             "Year Built",
             "VI",
             "Absentee Owner",
+            "Recent Purchase Candidate",
+            "Cash-Out Refi Candidate",
             "Fix & Flip Candidate",
             "DSCR Prospect",
             "Equity Rich Candidate",

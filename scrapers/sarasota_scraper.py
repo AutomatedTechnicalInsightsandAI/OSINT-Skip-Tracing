@@ -12,9 +12,12 @@ the GridView results table.
 
 from __future__ import annotations
 
+import csv
+import io
 import logging
 from datetime import datetime, timedelta
 from typing import List
+from urllib.parse import urlparse, parse_qs
 import requests
 
 from scrapers.base_scraper import (
@@ -22,6 +25,7 @@ from scrapers.base_scraper import (
     LeadType,
     PropertyRecord,
     estimate_interest_rate,
+    parse_record_date,
 )
 
 logger = logging.getLogger(__name__)
@@ -32,8 +36,17 @@ class SarasotaScraper(BaseScraper):
 
     # Bug 1 fix: use the correct ASP.NET search portal URL.
     CLERK_URL = "https://secure.sarasotaclerk.com/OfficialRecords.aspx"
-    PA_URL = "https://www.sc-pa.com/propertysearch/find"
+    PA_URL = "https://www.sc-pa.com/propertysearch"
+    PA_RESULT_URL = "https://www.sc-pa.com/propertysearch/Result"
+    PA_EXPORT_URL = "https://www.sc-pa.com/propertysearch/Search/ExportToCsv?qid={qid}"
     PA_PARCEL_URL = "https://www.sc-pa.com/propertysearch/parcel/details/{parcel_id}"
+    DOC_TYPE_ALIASES = {
+        "CERTIFICATE OF TITLE": "CERT OF TITLE",
+    }
+    CASHOUT_LOOKBACK_DAYS = 183
+    CASHOUT_MIN_SALE_PRICE = 250_000
+    MORTGAGE_LOOKAROUND_DAYS = 14
+    TARGET_QUALIFICATION_CODES = {"01"}
 
     @property
     def county_name(self) -> str:
@@ -57,6 +70,8 @@ class SarasotaScraper(BaseScraper):
             "Sarasota: fetching '%s' leads (max %d)", lead_type.value, max_results
         )
 
+        if lead_type == LeadType.CASHOUT_REFI:
+            return self._fetch_cashout_refi(max_results)
         if lead_type == LeadType.FLIPPER:
             return self._fetch_flippers(max_results)
         if lead_type == LeadType.HIGH_INTEREST:
@@ -75,6 +90,8 @@ class SarasotaScraper(BaseScraper):
         doc_type: str,
         date_from: str,
         date_to: str,
+        party_last: str = "",
+        party_first: str = "",
     ) -> None:
         """
         Navigate to the Sarasota ASP.NET Official Records portal and submit a
@@ -87,39 +104,79 @@ class SarasotaScraper(BaseScraper):
         self.sleep()
         self.random_scroll(page)
 
-        try:
-            # Select document/instrument type
-            page.select_option("select[id*='DocType']", label=doc_type)
-        except Exception:
-            # Fall back to any visible doc-type dropdown if the ID varies
-            try:
-                page.select_option("select", label=doc_type)
-            except Exception as exc:
-                logger.warning(
-                    "Sarasota: could not select doc type '%s': %s",
-                    doc_type,
-                    repr(exc),
-                )
+        self._select_doc_type(page, doc_type)
+        self._fill_party_name(page, party_last, party_first)
 
         try:
-            # Fill start date
-            page.fill("input[id*='DateFrom']", date_from)
+            page.fill("#ctl00_cphBody_rdAppFrom_dateInput", date_from)
         except Exception as exc:
             logger.warning("Sarasota: could not fill DateFrom: %s", repr(exc))
 
         try:
-            # Fill end date
-            page.fill("input[id*='DateTo']", date_to)
+            page.fill("#ctl00_cphBody_rdAppTo_dateInput", date_to)
         except Exception as exc:
             logger.warning("Sarasota: could not fill DateTo: %s", repr(exc))
 
         try:
-            # Click the Search / Submit button
-            page.click("input[type='submit'], button[type='submit']")
+            page.click("#ctl00_cphBody_bSearch_input")
             page.wait_for_load_state("networkidle")
             self.sleep()
         except Exception as exc:
             logger.warning("Sarasota: form submit failed: %s", repr(exc))
+
+    def _fill_party_name(self, page, party_last: str, party_first: str) -> None:
+        """Fill Sarasota's Party/Company search inputs when provided."""
+        if not party_last and not party_first:
+            return
+
+        try:
+            page.fill("#ctl00_cphBody_tbParty", party_last or "")
+        except Exception as exc:
+            logger.warning("Sarasota: could not fill party/company field: %s", repr(exc))
+
+        try:
+            page.fill("#ctl00_cphBody_tbPartyFirst", party_first or "")
+        except Exception as exc:
+            logger.warning("Sarasota: could not fill party first-name field: %s", repr(exc))
+
+    def _select_doc_type(self, page, doc_type: str) -> None:
+        """
+        Sarasota exposes document types as checkbox labels, not a <select>.
+        """
+        target = self.DOC_TYPE_ALIASES.get(doc_type, doc_type)
+        labels = page.locator("label[for]")
+
+        try:
+            label_count = labels.count()
+            for idx in range(label_count):
+                label = labels.nth(idx)
+                label_text = " ".join((label.inner_text() or "").split()).upper()
+                if label_text != target.upper():
+                    continue
+                checkbox_id = label.get_attribute("for")
+                if checkbox_id:
+                    page.locator(f"#{checkbox_id}").scroll_into_view_if_needed()
+                    page.check(f"#{checkbox_id}")
+                    logger.info("Sarasota: selected document type '%s'", target)
+                    return
+        except Exception:
+            pass
+
+        try:
+            matching = page.locator("label").filter(has_text=target).first
+            checkbox_id = matching.get_attribute("for")
+            if checkbox_id:
+                page.check(f"#{checkbox_id}")
+                logger.info(
+                    "Sarasota: used partial document type match '%s' for '%s'",
+                    target,
+                    doc_type,
+                )
+                return
+        except Exception:
+            pass
+
+        logger.warning("Sarasota: could not select doc type checkbox '%s'", doc_type)
 
     def _parse_results(self, page) -> list[dict]:
         """
@@ -132,33 +189,45 @@ class SarasotaScraper(BaseScraper):
         html = page.content()
         soup = self.parse_html(html)
 
-        # Try to find a GridView table by its auto-generated id pattern first.
-        table = soup.find("table", id=lambda x: x and "Grid" in x)
+        table = soup.select_one("#ctl00_cphBody_rgCaseList table")
         if table is None:
-            # Fall back to the first <table> that contains <tr> rows with <td>
-            for t in soup.find_all("table"):
-                if t.find("td"):
-                    table = t
+            for candidate in soup.find_all("table"):
+                headers = [self.safe_text(th).lower() for th in candidate.find_all("th")]
+                if {"date recorded", "document type", "name"}.issubset(headers):
+                    table = candidate
                     break
 
         rows_data: list[dict] = []
         if table is None:
             return rows_data
 
-        for tr in table.find_all("tr"):
-            cells = tr.find_all("td")
-            if len(cells) < 4:
-                continue
-            rows_data.append(
-                {
-                    "instrument_type": self.safe_text(cells[0]),
-                    "grantor": self.safe_text(cells[1]),
-                    "grantee": self.safe_text(cells[2]),
-                    "rec_date": self.safe_text(cells[3]),
-                    "book_page": self.safe_text(cells[4]) if len(cells) > 4 else "",
-                    "parcel_id": self.safe_text(cells[5]) if len(cells) > 5 else "",
-                }
-            )
+        headers = [self.safe_text(th).lower() for th in table.find_all("th")]
+        header_index = {header: idx for idx, header in enumerate(headers)}
+
+        if "document type" in header_index and "date recorded" in header_index:
+            for tr in table.find_all("tr"):
+                cells = tr.find_all("td")
+                if len(cells) < len(header_index):
+                    continue
+                rows_data.append(
+                    {
+                        "instrument_type": self.safe_text(
+                            cells[header_index["document type"]]
+                        ),
+                        "grantor": "",
+                        "grantee": self.safe_text(cells[header_index.get("name", 0)]),
+                        "rec_date": self.safe_text(
+                            cells[header_index["date recorded"]]
+                        ),
+                        "book_page": self.safe_text(cells[header_index.get("book-page", 0)]),
+                        "parcel_id": "",
+                        "legal_description": self.safe_text(
+                            cells[header_index.get("legal description", 0)]
+                        ),
+                    }
+                )
+            return rows_data
+
         return rows_data
 
     @staticmethod
@@ -360,6 +429,245 @@ class SarasotaScraper(BaseScraper):
         record.notes = " | ".join(dict.fromkeys([note for note in notes if note]))
         return record
 
+    def _fetch_cashout_refi(self, max_results: int) -> List[PropertyRecord]:
+        """
+        Find recent Sarasota purchases over $250k with no matching mortgage
+        recorded at purchase, which are strong cash-out refinance prospects.
+        """
+        records: List[PropertyRecord] = []
+        try:
+            sales = self._fetch_recent_sales_from_pa()
+            if not sales:
+                logger.info("Sarasota cash-out refi: no PA sales returned")
+                return records
+
+            page = self.new_page()
+            checked = 0
+            for sale in sales:
+                if len(records) >= max_results:
+                    break
+
+                owner_name = sale.get("owner_name", "")
+                sale_date = sale.get("last_sale_date", "")
+                if not owner_name or not sale_date:
+                    continue
+
+                checked += 1
+                has_mortgage = self._has_purchase_mortgage(page, owner_name, sale_date)
+                if has_mortgage:
+                    continue
+
+                records.append(
+                    PropertyRecord(
+                        owner_name=owner_name,
+                        property_address=sale.get("property_address", ""),
+                        mailing_address=sale.get("mailing_address", ""),
+                        last_sale_date=sale_date,
+                        estimated_interest_rate="0% (no mortgage at purchase)",
+                        county=self.county_name,
+                        lead_type=LeadType.CASHOUT_REFI.value,
+                        parcel_id=sale.get("parcel_id", ""),
+                        deed_type=sale.get("deed_type", ""),
+                        sale_price=sale.get("sale_price", ""),
+                        just_value=sale.get("just_value", ""),
+                        assessed_value=sale.get("assessed_value", ""),
+                        taxable_value=sale.get("taxable_value", ""),
+                        mtg_amt_at_purchase="0",
+                        mtg_amt_source=(
+                            f"No Sarasota mortgage record found within +/- "
+                            f"{self.MORTGAGE_LOOKAROUND_DAYS} days of sale date"
+                        ),
+                        year_built=sale.get("year_built", ""),
+                        property_type=sale.get("property_type", ""),
+                        lead_source="Sarasota PA + Official Records",
+                        notes=(
+                            "Recent purchase over $250k with no mortgage record "
+                            "found at purchase"
+                        ),
+                    )
+                )
+
+            page.context.close()
+            logger.info(
+                "Sarasota cash-out refi: checked %d candidates, returning %d leads",
+                checked,
+                len(records),
+            )
+        except Exception as exc:
+            logger.error("Sarasota cash-out refi scrape failed: %s", repr(exc))
+
+        return records
+
+    def _fetch_recent_sales_from_pa(self) -> list[dict]:
+        """Use Sarasota PA advanced search/export for recent sales over the price floor."""
+        sale_to = datetime.now()
+        sale_from = sale_to - timedelta(days=self.CASHOUT_LOOKBACK_DAYS)
+        payload = {
+            "SalesFrom": sale_from.strftime("%m/%d/%Y"),
+            "SalesTo": sale_to.strftime("%m/%d/%Y"),
+            "SaleAmountFrom": str(self.CASHOUT_MIN_SALE_PRICE),
+            "PageSize": "1000",
+        }
+
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/122.0.0.0 Safari/537.36"
+            )
+        }
+
+        try:
+            response = requests.post(
+                self.PA_RESULT_URL,
+                data=payload,
+                timeout=30,
+                headers=headers,
+            )
+            response.raise_for_status()
+        except Exception as exc:
+            logger.warning("Sarasota PA sales search failed: %s", repr(exc))
+            return []
+
+        qid = parse_qs(urlparse(response.url).query).get("qid", [""])[0]
+        if not qid:
+            logger.warning("Sarasota PA sales search returned no qid")
+            return []
+
+        try:
+            export_response = requests.get(
+                self.PA_EXPORT_URL.format(qid=qid),
+                timeout=60,
+                headers=headers,
+            )
+            export_response.raise_for_status()
+        except Exception as exc:
+            logger.warning("Sarasota PA CSV export failed: %s", repr(exc))
+            return []
+
+        csv_text = export_response.text.lstrip("\ufeff")
+        csv_lines = csv_text.splitlines()
+        if csv_lines and csv_lines[0].startswith("NOTE:"):
+            csv_text = "\n".join(csv_lines[1:])
+
+        reader = csv.DictReader(io.StringIO(csv_text))
+        sales: list[dict] = []
+        seen_parcels: set[str] = set()
+        for row in reader:
+            parcel_id = self.normalize_parcel_id(row.get("Account #", ""))
+            if not parcel_id or parcel_id in seen_parcels:
+                continue
+
+            sale_date = parse_record_date(row.get("Last Sale Date", ""))
+            sale_price = self._to_float(row.get("Last Sale Amount", ""))
+            if not sale_date or sale_price < self.CASHOUT_MIN_SALE_PRICE:
+                continue
+            if sale_date < sale_from or sale_date > sale_to:
+                continue
+
+            qual_code = (row.get("Last Qualification Code", "") or "").strip()
+            if self.TARGET_QUALIFICATION_CODES and qual_code not in self.TARGET_QUALIFICATION_CODES:
+                continue
+
+            deed_type = (row.get("Last Transaction Code", "") or "").strip()
+            if not deed_type:
+                continue
+
+            seen_parcels.add(parcel_id)
+            owners = [
+                (row.get("Owner 1", "") or "").strip(),
+                (row.get("Owner 2", "") or "").strip(),
+                (row.get("Owner 3", "") or "").strip(),
+            ]
+            owner_name = " & ".join([owner for owner in owners if owner])
+
+            sales.append(
+                {
+                    "parcel_id": parcel_id,
+                    "owner_name": owner_name,
+                    "property_address": (row.get("Situs Address", "") or "").strip(),
+                    "mailing_address": (row.get("Mailing Address", "") or "").strip(),
+                    "sale_price": str(int(round(sale_price))),
+                    "last_sale_date": sale_date.strftime("%m/%d/%Y"),
+                    "deed_type": deed_type,
+                    "just_value": self._clean_currency(row.get("Just Value", "")),
+                    "assessed_value": self._clean_currency(row.get("Assessed Value", "")),
+                    "taxable_value": self._clean_currency(row.get("Taxable Value", "")),
+                    "year_built": (row.get("Year Built", "") or "").strip(),
+                    "property_type": (row.get("Description", "") or "").strip(),
+                }
+            )
+
+        sales.sort(
+            key=lambda row: parse_record_date(row.get("last_sale_date", "")) or datetime.min,
+            reverse=True,
+        )
+        logger.info("Sarasota PA export returned %d recent high-price sales", len(sales))
+        return sales
+
+    def _has_purchase_mortgage(self, page, owner_name: str, sale_date: str) -> bool:
+        """Return True when Sarasota Official Records shows a mortgage near closing."""
+        sale_dt = parse_record_date(sale_date)
+        if not sale_dt:
+            return False
+
+        party_last, party_first = self._split_owner_search_name(owner_name)
+        if not party_last:
+            return False
+
+        date_from = (sale_dt - timedelta(days=self.MORTGAGE_LOOKAROUND_DAYS)).strftime("%m/%d/%Y")
+        date_to = (sale_dt + timedelta(days=self.MORTGAGE_LOOKAROUND_DAYS)).strftime("%m/%d/%Y")
+        self._search_official_records(
+            page,
+            "MORTGAGE",
+            date_from,
+            date_to,
+            party_last=party_last,
+            party_first=party_first,
+        )
+
+        rows = self._parse_results(page)
+        if not rows:
+            return False
+
+        normalized_target = self._normalize_name(owner_name)
+        for row in rows:
+            row_name = self._normalize_name(row.get("grantee", ""))
+            if normalized_target and normalized_target == row_name:
+                return True
+            if normalized_target and normalized_target in row_name:
+                return True
+            if row_name and party_last.upper() in row_name:
+                return True
+        return False
+
+    @staticmethod
+    def _split_owner_search_name(owner_name: str) -> tuple[str, str]:
+        """Split Sarasota PA owner text into OR party search fields."""
+        clean = " ".join((owner_name or "").replace("&", " ").split())
+        if not clean:
+            return "", ""
+
+        company_tokens = {"LLC", "INC", "CORP", "CORPORATION", "LP", "LTD", "TRUST", "LC", "CO"}
+        parts = clean.split()
+        if len(parts) == 1 or any(token.upper().strip(".,") in company_tokens for token in parts):
+            return clean, ""
+        return parts[0], " ".join(parts[1:])
+
+    @staticmethod
+    def _normalize_name(value: str) -> str:
+        return " ".join((value or "").upper().replace(",", " ").split())
+
+    @staticmethod
+    def _to_float(value: str) -> float:
+        cleaned = (value or "").replace("$", "").replace(",", "").strip()
+        if not cleaned:
+            return 0.0
+        try:
+            return float(cleaned)
+        except ValueError:
+            return 0.0
+
     # ------------------------------------------------------------------
     # Lead-type specific scrapers
     # ------------------------------------------------------------------
@@ -385,7 +693,13 @@ class SarasotaScraper(BaseScraper):
                 instrument_type = row["instrument_type"]
                 if "deed" not in instrument_type.lower():
                     continue
-                parcel_id = row["parcel_id"] or row["book_page"] or row["grantor"]
+                parcel_id = (
+                    row["parcel_id"]
+                    or row.get("legal_description", "")
+                    or row["book_page"]
+                    or row["grantor"]
+                    or row["grantee"]
+                )
                 parcel_id = self.normalize_parcel_id(parcel_id) or parcel_id
                 parcel_transfers.setdefault(parcel_id, []).append(
                     {

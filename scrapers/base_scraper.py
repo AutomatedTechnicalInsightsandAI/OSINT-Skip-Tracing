@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 class LeadType(str, Enum):
     """Supported lead categories for Prime Coastal Funding."""
 
+    CASHOUT_REFI = "Recent Purchase Cash-Out Refi Prospects"
     FLIPPER = "Fix & Flip Investors"
     HIGH_INTEREST = "High Interest / High Equity (DSCR Prospects)"
     PAST_FINANCING = "Past Financing (Satisfied Mortgage / Certificate of Title)"
@@ -127,6 +128,24 @@ def estimate_interest_rate(date_str: str) -> str:
         except ValueError:
             continue
     return "Unknown"
+
+
+def parse_record_date(date_str: str) -> Optional[datetime]:
+    """Parse common county/public-record date formats into a datetime."""
+    if not date_str:
+        return None
+    for fmt in (
+        "%m/%d/%Y",
+        "%Y-%m-%d",
+        "%m-%d-%Y",
+        "%B %d, %Y",
+        "%m/%d/%Y %I:%M:%S %p",
+    ):
+        try:
+            return datetime.strptime(date_str.strip(), fmt)
+        except ValueError:
+            continue
+    return None
 
 
 def is_high_rate_era(date_str: str) -> bool:

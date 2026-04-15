@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import logging
 import traceback
+from datetime import datetime
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
@@ -54,6 +56,11 @@ COUNTY_SCRAPERS = {
 }
 
 LEAD_TYPE_HELP = {
+    LeadType.CASHOUT_REFI: (
+        "Recent Sarasota purchases in the last **6 months** with **sale price > $250k** "
+        "and **no matching mortgage recorded at purchase**. These are strong "
+        "cash-out refinance targets."
+    ),
     LeadType.FLIPPER: (
         "Properties with **2+ deed transfers within 12 months** - "
         "likely fix-and-flip investors who may need short-term bridge financing."
@@ -198,6 +205,17 @@ def run_scrapers(config: dict) -> pd.DataFrame:
     return df
 
 
+def save_results_csv(df: pd.DataFrame, lead_type: LeadType) -> Path:
+    """Persist the current result set to the local exports folder."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_lead_type = (
+        lead_type.name.lower()
+        .replace(" ", "_")
+    )
+    output_path = Path("exports") / f"prime_coastal_leads_{safe_lead_type}_{timestamp}.csv"
+    return CSVExporter.to_file(df, output_path)
+
+
 def main():
     st.title("Prime Coastal Funding - OSINT Lead Generator")
     st.markdown(
@@ -239,9 +257,19 @@ def main():
 
         if "results_df" not in st.session_state:
             st.session_state["results_df"] = pd.DataFrame()
+        if "saved_csv_path" not in st.session_state:
+            st.session_state["saved_csv_path"] = ""
 
         if generate:
             st.session_state["results_df"] = run_scrapers(config)
+            if not st.session_state["results_df"].empty:
+                saved_path = save_results_csv(
+                    st.session_state["results_df"],
+                    config["lead_type"],
+                )
+                st.session_state["saved_csv_path"] = str(saved_path)
+            else:
+                st.session_state["saved_csv_path"] = ""
 
         df: pd.DataFrame = st.session_state["results_df"]
 
@@ -252,6 +280,10 @@ def main():
             )
         else:
             st.subheader("Results")
+            saved_csv_path = st.session_state.get("saved_csv_path", "")
+            if saved_csv_path:
+                st.caption(f"Saved to `{saved_csv_path}`")
+
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Total Records", len(df))
             email_col = "Scraped Emails"
@@ -273,7 +305,13 @@ def main():
             m4.metric("Absentee Owners", absentee_count)
 
             display_df = df.copy()
-            if "Est Equity Pct" in display_df.columns:
+            if "Lead Score" in display_df.columns:
+                display_df = display_df.sort_values(
+                    by=["Lead Score", "Last Sale Date"],
+                    ascending=[False, False],
+                    na_position="last",
+                )
+            elif "Est Equity Pct" in display_df.columns:
                 display_df = display_df.sort_values(
                     by="Est Equity Pct",
                     ascending=False,
