@@ -24,6 +24,8 @@ coverage.xml
 
 # Streamlit cache
 .streamlit/
+.cache/
+exports/
 
 # Editor / OS
 .DS_Store

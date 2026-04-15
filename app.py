@@ -76,6 +76,24 @@ LEAD_TYPE_HELP = {
     ),
 }
 
+OUTREACH_PRIORITY_COLUMNS = [
+    "Owner Name",
+    "Property Address",
+    "Mailing Address",
+    "Last Sale Date",
+    "Sale Price",
+    "Mtg Amt At Purchase",
+    "Mtg Amt Source",
+    "Lead Strategy",
+    "Lead Score",
+    "Absentee Owner",
+    "Scraped Emails",
+    "County",
+    "Property Type",
+    "Parcel ID",
+    "Notes",
+]
+
 
 def render_sidebar() -> dict:
     """Render sidebar controls and return the user's selections."""
@@ -216,6 +234,12 @@ def save_results_csv(df: pd.DataFrame, lead_type: LeadType) -> Path:
     return CSVExporter.to_file(df, output_path)
 
 
+def build_outreach_view(df: pd.DataFrame) -> pd.DataFrame:
+    """Return a simplified outreach-first view of the lead table."""
+    visible_columns = [col for col in OUTREACH_PRIORITY_COLUMNS if col in df.columns]
+    return df[visible_columns].copy()
+
+
 def main():
     st.title("Prime Coastal Funding - OSINT Lead Generator")
     st.markdown(
@@ -318,11 +342,20 @@ def main():
                     na_position="last",
                 )
 
+            outreach_df = build_outreach_view(display_df)
+            st.caption("Outreach-first view")
             st.dataframe(
-                display_df,
+                outreach_df,
                 width="stretch",
                 hide_index=True,
             )
+
+            with st.expander("Full Detail View", expanded=False):
+                st.dataframe(
+                    display_df,
+                    width="stretch",
+                    hide_index=True,
+                )
 
             st.divider()
             csv_bytes = CSVExporter.to_bytes(df)

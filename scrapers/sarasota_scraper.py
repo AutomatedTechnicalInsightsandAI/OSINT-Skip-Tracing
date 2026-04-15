@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import csv
 import io
+import json
 import logging
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import List
 from urllib.parse import urlparse, parse_qs
 import requests
@@ -51,6 +53,11 @@ class SarasotaScraper(BaseScraper):
     CASHOUT_MIN_CANDIDATES_TO_CHECK = 75
     TARGET_QUALIFICATION_CODES = {"01"}
     NON_PERSON_TOKENS = {"TRUST", "TR", "TTEE", "TRUSTEE", "LLC", "INC", "CORP", "CORPORATION", "LP", "LTD", "LC", "CO"}
+    CACHE_PATH = Path(".cache") / "sarasota_mortgage_lookup.json"
+
+    def __init__(self, headless: bool = False, timeout_ms: int = 30_000):
+        super().__init__(headless=headless, timeout_ms=timeout_ms)
+        self._mortgage_lookup_cache = self._load_mortgage_cache()
 
     @property
     def county_name(self) -> str:
@@ -127,6 +134,49 @@ class SarasotaScraper(BaseScraper):
             self.sleep()
         except Exception as exc:
             logger.warning("Sarasota: form submit failed: %s", repr(exc))
+
+    def _load_mortgage_cache(self) -> dict[str, bool]:
+        """Load persisted Sarasota mortgage lookup decisions from disk."""
+        try:
+            if not self.CACHE_PATH.exists():
+                return {}
+            with self.CACHE_PATH.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            if isinstance(payload, dict):
+                return {str(key): bool(value) for key, value in payload.items()}
+        except Exception as exc:
+            logger.warning("Sarasota: could not load mortgage cache: %s", repr(exc))
+        return {}
+
+    def _save_mortgage_cache(self) -> None:
+        """Persist mortgage lookup cache so reruns can reuse prior checks."""
+        try:
+            self.CACHE_PATH.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = self.CACHE_PATH.with_suffix(".tmp")
+            with temp_path.open("w", encoding="utf-8") as handle:
+                json.dump(self._mortgage_lookup_cache, handle, indent=2, sort_keys=True)
+            temp_path.replace(self.CACHE_PATH)
+        except Exception as exc:
+            logger.warning("Sarasota: could not save mortgage cache: %s", repr(exc))
+
+    @staticmethod
+    def _mortgage_cache_key(
+        search_name: str,
+        party_last: str,
+        party_first: str,
+        date_from: str,
+        date_to: str,
+    ) -> str:
+        return "|".join(
+            [
+                "MORTGAGE",
+                search_name.upper(),
+                party_last.upper(),
+                party_first.upper(),
+                date_from,
+                date_to,
+            ]
+        )
 
     def _fill_party_name(self, page, party_last: str, party_first: str) -> None:
         """Fill Sarasota's Party/Company search inputs when provided."""
@@ -672,6 +722,15 @@ class SarasotaScraper(BaseScraper):
             party_last, party_first = self._split_owner_search_name(search_name)
             if not party_last:
                 continue
+            cache_key = self._mortgage_cache_key(
+                search_name=search_name,
+                party_last=party_last,
+                party_first=party_first,
+                date_from=date_from,
+                date_to=date_to,
+            )
+            if cache_key in self._mortgage_lookup_cache:
+                return self._mortgage_lookup_cache[cache_key]
 
             logger.info(
                 "Sarasota cash-out refi: mortgage search for '%s' using last/business='%s' first='%s' dates %s..%s",
@@ -693,17 +752,27 @@ class SarasotaScraper(BaseScraper):
 
             rows = self._parse_results(page)
             if not rows:
+                self._mortgage_lookup_cache[cache_key] = False
+                self._save_mortgage_cache()
                 continue
 
             normalized_target = self._normalize_name(search_name)
             for row in rows:
                 row_name = self._normalize_name(row.get("grantee", ""))
                 if normalized_target and normalized_target == row_name:
+                    self._mortgage_lookup_cache[cache_key] = True
+                    self._save_mortgage_cache()
                     return True
                 if normalized_target and normalized_target in row_name:
+                    self._mortgage_lookup_cache[cache_key] = True
+                    self._save_mortgage_cache()
                     return True
                 if row_name and party_last.upper() in row_name:
+                    self._mortgage_lookup_cache[cache_key] = True
+                    self._save_mortgage_cache()
                     return True
+            self._mortgage_lookup_cache[cache_key] = False
+            self._save_mortgage_cache()
         return False
 
     def _split_owner_search_name(self, owner_name: str) -> tuple[str, str]:
