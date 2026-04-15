@@ -15,7 +15,9 @@ the sleep calls or run this at high concurrency.
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 import random
 import re
 import time
@@ -82,6 +84,8 @@ class GoogleDorker:
         self.fetch_pages = fetch_pages
         self.timeout = timeout
         self._extractor = EmailExtractor()
+        self._cache_path = Path(".cache") / "google_dork_cache.json"
+        self._cache = self._load_cache()
 
     # ------------------------------------------------------------------
     # Public API
@@ -102,31 +106,62 @@ class GoogleDorker:
             return {"emails": [], "linkedin": [], "queries": []}
 
         name = owner_name.strip()
+        if name in self._cache:
+            cached = self._cache[name]
+            return {
+                "emails": cached.get("emails", []),
+                "linkedin": cached.get("linkedin", []),
+                "queries": cached.get("queries", []),
+                "cached": True,
+                "rate_limited": cached.get("rate_limited", False),
+            }
+
         emails: set[str] = set()
         linkedin_urls: list[str] = []
         executed_queries: list[str] = []
+        rate_limited = False
 
         # Email dorks
         for template in _EMAIL_DORKS:
             query = template.format(name=name)
-            found_emails, _ = self._run_query(query)
+            found_emails, _, was_rate_limited = self._run_query(query)
             emails.update(found_emails)
             executed_queries.append(query)
+            if was_rate_limited:
+                rate_limited = True
+                break
             self._pause()
 
         # LinkedIn dorks
-        for template in _LINKEDIN_DORKS:
-            query = template.format(name=name)
-            _, found_linkedin = self._run_query(query, linkedin_mode=True)
-            linkedin_urls.extend(found_linkedin)
-            executed_queries.append(query)
-            self._pause()
+        if not rate_limited:
+            for template in _LINKEDIN_DORKS:
+                query = template.format(name=name)
+                _, found_linkedin, was_rate_limited = self._run_query(
+                    query,
+                    linkedin_mode=True,
+                )
+                linkedin_urls.extend(found_linkedin)
+                executed_queries.append(query)
+                if was_rate_limited:
+                    rate_limited = True
+                    break
+                self._pause()
 
-        return {
+        result = {
             "emails": sorted(emails),
             "linkedin": list(dict.fromkeys(linkedin_urls)),  # dedup, preserve order
             "queries": executed_queries,
+            "cached": False,
+            "rate_limited": rate_limited,
         }
+        self._cache[name] = {
+            "emails": result["emails"],
+            "linkedin": result["linkedin"],
+            "queries": result["queries"],
+            "rate_limited": rate_limited,
+        }
+        self._save_cache()
+        return result
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -134,12 +169,13 @@ class GoogleDorker:
 
     def _run_query(
         self, query: str, linkedin_mode: bool = False
-    ) -> tuple[list[str], list[str]]:
+    ) -> tuple[list[str], list[str], bool]:
         """
         Execute a single Google search query and return (emails, linkedin_urls).
         """
         emails: list[str] = []
         linkedin_urls: list[str] = []
+        rate_limited = False
 
         try:
             from googlesearch import search as google_search  # noqa: PLC0415
@@ -154,7 +190,9 @@ class GoogleDorker:
             )
         except Exception as exc:
             logger.warning("Google search failed for '%s': %s", query, exc)
-            return emails, linkedin_urls
+            if "429" in repr(exc) or "Too Many Requests" in repr(exc):
+                rate_limited = True
+            return emails, linkedin_urls, rate_limited
 
         for url in urls:
             try:
@@ -171,7 +209,7 @@ class GoogleDorker:
                 emails.extend(page_emails)
                 self._fetch_pause()
 
-        return emails, linkedin_urls
+        return emails, linkedin_urls, rate_limited
 
     def _scrape_url_for_emails(self, url: str) -> List[str]:
         """GET *url* and extract email addresses from the response text."""
@@ -200,3 +238,24 @@ class GoogleDorker:
         """Shorter sleep between page-fetch requests."""
         delay = random.uniform(*_FETCH_PAUSE_RANGE)
         time.sleep(delay)
+
+    def _load_cache(self) -> dict:
+        try:
+            if not self._cache_path.exists():
+                return {}
+            with self._cache_path.open("r", encoding="utf-8") as handle:
+                payload = json.load(handle)
+            return payload if isinstance(payload, dict) else {}
+        except Exception as exc:
+            logger.warning("Could not load Google dork cache: %s", exc)
+            return {}
+
+    def _save_cache(self) -> None:
+        try:
+            self._cache_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path = self._cache_path.with_suffix(".tmp")
+            with temp_path.open("w", encoding="utf-8") as handle:
+                json.dump(self._cache, handle, indent=2, sort_keys=True)
+            temp_path.replace(self._cache_path)
+        except Exception as exc:
+            logger.warning("Could not save Google dork cache: %s", exc)

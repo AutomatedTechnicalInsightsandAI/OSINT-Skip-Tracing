@@ -82,12 +82,26 @@ class DataProcessor:
         ]
 
         email_map: dict[str, str] = {}
+        rate_limited = False
         for owner in unique_owners:
+            if rate_limited:
+                logger.info(
+                    "Skip-tracing paused for remaining owners because Google rate-limited the session"
+                )
+                email_map[owner] = ""
+                continue
             logger.info("Skip-tracing: %s", owner)
             try:
                 result = self._dorker.search(owner)
                 emails = result.get("emails", [])
                 email_map[owner] = "; ".join(emails) if emails else ""
+                if result.get("cached"):
+                    logger.info("Skip-tracing cache hit: %s", owner)
+                if result.get("rate_limited"):
+                    rate_limited = True
+                    logger.warning(
+                        "Skip-tracing hit Google rate limits; keeping partial results and stopping additional lookups"
+                    )
             except Exception as exc:
                 logger.warning("Skip-trace failed for '%s': %s", owner, exc)
                 email_map[owner] = ""
