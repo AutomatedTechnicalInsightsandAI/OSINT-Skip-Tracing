@@ -57,9 +57,9 @@ COUNTY_SCRAPERS = {
 
 LEAD_TYPE_HELP = {
     LeadType.CASHOUT_REFI: (
-        "Recent Sarasota purchases in the last **6 months** with **sale price > $250k** "
-        "and **no matching mortgage recorded at purchase**. These are strong "
-        "cash-out refinance targets."
+        "Sarasota purchases with **Last Sale Date from 07/01/2023 through 09/30/2024**, "
+        "**sale price > $250k**, and **no matching mortgage recorded at purchase**. "
+        "These are strong cash-out refinance targets."
     ),
     LeadType.FLIPPER: (
         "Properties with **2+ deed transfers within 12 months** - "

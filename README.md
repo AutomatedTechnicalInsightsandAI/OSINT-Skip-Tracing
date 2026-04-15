@@ -1,61 +1,92 @@
-# OSINT Skip-Tracing — Prime Coastal Funding Lead Generator
+# OSINT Skip-Tracing
 
-A local Python web application (Streamlit) that generates **commercial real
-estate leads** for Prime Coastal Funding by scraping free Florida public
-property records and enriching them with open-source skip-traced contact
-information — **no paid APIs required**.
+Local Streamlit app for generating Florida real-estate leads from public records, then optionally enriching those leads with open-source contact research.
 
----
+The project is currently tuned for Prime Coastal Funding workflows, with the strongest live path focused on Sarasota recent-purchase cash-out refinance prospects.
 
-## Features
+## What It Does
 
-| Module | Description |
-|--------|-------------|
-| **Base Scraper** | Abstract class with Playwright headful browser, random-sleep anti-detection, and BeautifulSoup parsing helpers |
-| **County Scrapers** | Concrete scrapers for **Sarasota**, **Miami-Dade**, and **Broward** counties — easily extendable to additional counties |
-| **Skip Tracing** | Google Dorking (via `googlesearch-python`) + `re`-based email extraction from page source |
-| **Streamlit Dashboard** | Sidebar lead-type selector, county multi-select, real-time progress, metrics, and one-click CSV download |
+- Scrapes public county records with Playwright and BeautifulSoup
+- Normalizes results into a CSV-friendly lead table
+- Supports multiple lead strategies across Sarasota, Miami-Dade, and Broward
+- Optionally performs skip tracing with Google dorking
+- Saves each successful run to `exports/`
+- Caches expensive lookups in `.cache/` so reruns are much faster
 
-### Lead Types
+## Current Lead Types
 
-* **Fix & Flip Investors** — Properties with ≥ 2 deed transfers within 12 months
-* **High Interest / High Equity (DSCR Prospects)** — Mortgage Deeds from 2022-2023 (peak rate era) or properties with no mortgage in 20+ years
-* **Past Financing** — Certificate of Title or Satisfaction of Mortgage records
+- `Recent Purchase Cash-Out Refi Prospects`
+  Sarasota-focused workflow that targets:
+  - purchases in the last 6 months
+  - sale price over $250,000
+  - no matching Sarasota mortgage found near the purchase date
+- `Fix & Flip Investors`
+  Properties with 2 or more deed transfers within 12 months
+- `High Interest / High Equity (DSCR Prospects)`
+  Mortgage deeds from 2022-2023 or older no-mortgage-style scenarios
+- `Past Financing (Satisfied Mortgage / Certificate of Title)`
+  Records tied to prior financing events
 
-### CSV Output Columns
+## Sarasota Cash-Out Refi Workflow
 
-```
-Owner Name | Property Address | Mailing Address | Last Sale Date | Estimated Interest Rate | Scraped Emails
-```
+This is the most developed lead path in the app today.
 
----
+1. Pull recent high-price sales from the Sarasota Property Appraiser export.
+2. Keep sales inside the recent-purchase window and above the price threshold.
+3. Search Sarasota Official Records for matching mortgage filings near the sale date.
+4. If no matching mortgage is found, mark the lead as a cash-out refi prospect with `Mtg Amt At Purchase = 0`.
+5. Save the results to CSV and show an outreach-first table in Streamlit.
+
+Important implementation notes:
+
+- Mortgage lookups are cached in `.cache/sarasota_mortgage_lookup.json`
+- Owner-name search inputs are cleaned before being placed into Sarasota Clerk search fields
+- The mortgage date window is tied to the sale date, not a generic year-long search
+
+## Recommended Workflow
+
+For fastest results:
+
+1. Run lead generation with `Enable Skip Tracing` turned off.
+2. Review the lead list first.
+3. Turn skip tracing on only for smaller, higher-quality batches.
+
+Why:
+
+- Lead generation is now relatively fast.
+- Google dorking is much slower and can hit rate limits.
+- Skip-trace results are cached in `.cache/google_dork_cache.json`, so reruns improve over time.
 
 ## Project Structure
 
-```
+```text
 OSINT-Skip-Tracing/
-├── app.py                        # Streamlit dashboard entry point
-├── requirements.txt
-├── scrapers/
-│   ├── base_scraper.py           # Abstract base class + shared utilities
-│   ├── sarasota_scraper.py       # Sarasota County scraper
-│   ├── miami_dade_scraper.py     # Miami-Dade County scraper
-│   └── broward_scraper.py        # Broward County scraper
-├── skip_tracing/
-│   ├── google_dorking.py         # Google Dork query engine
-│   └── email_extractor.py        # Regex email extractor (re library)
-├── utils/
-│   ├── data_processor.py         # Record merging + skip-trace enrichment
-│   └── csv_exporter.py           # CSV serialisation helpers
-└── tests/
-    ├── test_base_scraper.py
-    ├── test_email_extractor.py
-    └── test_data_processor.py
+|-- app.py
+|-- requirements.txt
+|-- README.md
+|-- scrapers/
+|   |-- base_scraper.py
+|   |-- sarasota_scraper.py
+|   |-- miami_dade_scraper.py
+|   `-- broward_scraper.py
+|-- skip_tracing/
+|   |-- google_dorking.py
+|   `-- email_extractor.py
+|-- utils/
+|   |-- data_processor.py
+|   `-- csv_exporter.py
+|-- tests/
+|   |-- test_base_scraper.py
+|   |-- test_data_processor.py
+|   `-- test_email_extractor.py
+|-- .cache/
+|   |-- sarasota_mortgage_lookup.json
+|   `-- google_dork_cache.json
+`-- exports/
+    `-- prime_coastal_leads_*.csv
 ```
 
----
-
-## Setup & Usage
+## Setup
 
 ### 1. Install dependencies
 
@@ -63,7 +94,7 @@ OSINT-Skip-Tracing/
 pip install -r requirements.txt
 ```
 
-### 2. Install Playwright browsers (first run only)
+### 2. Install Playwright Chromium
 
 ```bash
 playwright install chromium
@@ -75,28 +106,89 @@ playwright install chromium
 streamlit run app.py
 ```
 
-The app opens at **http://localhost:8501** — no login required.
+Default local URL:
 
----
+```text
+http://localhost:8501
+```
 
-## Sidebar Controls
+## Sidebar Options
 
-| Control | Description |
-|---------|-------------|
-| **Florida Counties** | Multi-select: Sarasota, Miami-Dade, Broward |
-| **Lead Type** | Fix & Flip / High Interest / Past Financing |
-| **Max Records per County** | Soft cap (5–200, default 50) |
-| **Headless Browser** | Uncheck for headful mode (recommended for government sites) |
-| **Enable Skip Tracing** | Run Google Dork queries to find owner emails (slow) |
+- `Florida Counties`
+  Select one or more supported counties
+- `Lead Type`
+  Choose which lead strategy to run
+- `Max Records per County`
+  Soft cap for records returned
+- `Headless Browser`
+  Visible browser is usually safer for government portals
+- `Enable Skip Tracing`
+  Optional contact enrichment using Google dorking
 
----
+## Output
 
-## Extending to New Counties
+Each successful run:
 
-Create a new file in `scrapers/` that inherits from `BaseScraper`:
+- displays results inside Streamlit
+- saves a CSV to `exports/`
+- keeps a simplified outreach-first table visible by default
+- keeps the full wide dataset under `Full Detail View`
+
+Common lead fields include:
+
+- `Owner Name`
+- `Property Address`
+- `Mailing Address`
+- `Last Sale Date`
+- `Sale Price`
+- `Mtg Amt At Purchase`
+- `Mtg Amt Source`
+- `Lead Strategy`
+- `Lead Score`
+- `Scraped Emails`
+
+## Caching
+
+Two caches are used to speed up reruns:
+
+- `Sarasota mortgage lookup cache`
+  Prevents repeated Sarasota Clerk mortgage searches for the same owner/date window
+- `Google dork cache`
+  Prevents repeated skip-trace lookups for the same owner name and preserves rate-limited outcomes
+
+These caches live in `.cache/` and are ignored by git.
+
+## Skip Tracing Behavior
+
+Skip tracing uses Google dork queries plus lightweight page scraping.
+
+Practical constraints:
+
+- Google can return `429 Too Many Requests`
+- when rate limiting is detected, the app now stops additional skip-trace queries and keeps partial results
+- cached skip-trace outcomes make later reruns much faster
+
+## Testing
+
+Run the tests with:
+
+```bash
+pytest tests/ -v
+```
+
+## Extending the App
+
+To add a new county scraper:
+
+1. Create a new scraper in `scrapers/` that inherits from `BaseScraper`
+2. Implement `county_name`, `search_url`, and `fetch_records(...)`
+3. Register it in `COUNTY_SCRAPERS` inside `app.py`
+
+Minimal example:
 
 ```python
-from scrapers.base_scraper import BaseScraper, LeadType, PropertyRecord
+from scrapers.base_scraper import BaseScraper
+
 
 class PinellasScraper(BaseScraper):
     @property
@@ -105,39 +197,15 @@ class PinellasScraper(BaseScraper):
 
     @property
     def search_url(self) -> str:
-        return "https://www.pinellasclerk.org/asp/officialrecords.asp"
+        return "https://example.com"
 
     def fetch_records(self, lead_type, max_results=50):
-        ...  # county-specific scraping logic
+        return []
 ```
 
-Then register it in `app.py`:
+## Notes
 
-```python
-COUNTY_SCRAPERS["Pinellas"] = PinellasScraper
-```
-
----
-
-## Anti-Detection Measures
-
-* **Headful browser mode** (default) — opens a visible Chromium window, which is far less likely to be fingerprinted as a bot by government portals
-* **Random sleep intervals** — 2–6 s between page requests, 5–12 s on heavy pages
-* **Random user-agent rotation** via `fake-useragent`
-* **Random scroll simulation** to mimic human reading behaviour
-
----
-
-## Constraints & Compliance
-
-* **No paid APIs** — uses only `pandas`, `playwright`, `streamlit`, `beautifulsoup4`, `googlesearch-python`, `requests`, and `fake-useragent`
-* **Public records only** — all data sourced from freely accessible Florida government portals
-* **Local only** — the app runs on `localhost` with no authentication
-
----
-
-## Running Tests
-
-```bash
-pytest tests/ -v
-```
+- This project uses public-record and open-web data only
+- No paid APIs are required
+- The app is intended to run locally
+- Headful browser mode is usually the safest choice for county portals

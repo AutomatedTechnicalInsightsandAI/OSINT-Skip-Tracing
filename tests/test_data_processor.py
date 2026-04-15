@@ -106,12 +106,12 @@ def test_process_adds_equity_and_flags(processor_no_skip):
 
 
 def test_process_flags_cashout_refi_candidates(processor_no_skip):
-    recent_date = (datetime.now() - timedelta(days=30)).strftime("%m/%d/%Y")
+    peak_rate_date = "08/15/2024"
     record = PropertyRecord(
         owner_name="Cash Buyer",
         property_address="10 Bay St, Sarasota, FL",
         mailing_address="10 Bay St, Sarasota, FL",
-        last_sale_date=recent_date,
+        last_sale_date=peak_rate_date,
         county="Sarasota",
         lead_type=LeadType.CASHOUT_REFI.value,
         sale_price="450000",
@@ -122,7 +122,8 @@ def test_process_flags_cashout_refi_candidates(processor_no_skip):
     )
     df = processor_no_skip.process([record])
     row = df.iloc[0]
-    assert bool(row["Recent Purchase Candidate"]) is True
+    assert bool(row["Recent Purchase Candidate"]) is False
+    assert bool(row["Peak Rate Purchase Candidate"]) is True
     assert bool(row["Cash-Out Refi Candidate"]) is True
     assert row["Lead Strategy"] == LeadType.CASHOUT_REFI.value
 

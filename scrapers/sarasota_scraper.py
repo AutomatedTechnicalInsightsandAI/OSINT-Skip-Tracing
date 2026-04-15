@@ -45,7 +45,8 @@ class SarasotaScraper(BaseScraper):
     DOC_TYPE_ALIASES = {
         "CERTIFICATE OF TITLE": "CERT OF TITLE",
     }
-    CASHOUT_LOOKBACK_DAYS = 183
+    CASHOUT_SALE_FROM = datetime(2023, 7, 1)
+    CASHOUT_SALE_TO = datetime(2024, 9, 30)
     CASHOUT_MIN_SALE_PRICE = 250_000
     MORTGAGE_LOOKBACK_DAYS = 7
     MORTGAGE_LOOKAHEAD_DAYS = 21
@@ -485,8 +486,8 @@ class SarasotaScraper(BaseScraper):
 
     def _fetch_cashout_refi(self, max_results: int) -> List[PropertyRecord]:
         """
-        Find recent Sarasota purchases over $250k with no matching mortgage
-        recorded at purchase, which are strong cash-out refinance prospects.
+        Find Sarasota purchases from the peak-rate window over $250k with no
+        matching mortgage recorded at purchase.
         """
         records: List[PropertyRecord] = []
         try:
@@ -592,9 +593,9 @@ class SarasotaScraper(BaseScraper):
         return records
 
     def _fetch_recent_sales_from_pa(self) -> list[dict]:
-        """Use Sarasota PA advanced search/export for recent sales over the price floor."""
-        sale_to = datetime.now()
-        sale_from = sale_to - timedelta(days=self.CASHOUT_LOOKBACK_DAYS)
+        """Use Sarasota PA advanced search/export for target-window sales over the price floor."""
+        sale_from = self.CASHOUT_SALE_FROM
+        sale_to = self.CASHOUT_SALE_TO
         payload = {
             "SalesFrom": sale_from.strftime("%m/%d/%Y"),
             "SalesTo": sale_to.strftime("%m/%d/%Y"),
@@ -696,7 +697,10 @@ class SarasotaScraper(BaseScraper):
             key=lambda row: parse_record_date(row.get("last_sale_date", "")) or datetime.min,
             reverse=True,
         )
-        logger.info("Sarasota PA export returned %d recent high-price sales", len(sales))
+        logger.info(
+            "Sarasota PA export returned %d peak-window high-price sales",
+            len(sales),
+        )
         return sales
 
     def _has_purchase_mortgage(

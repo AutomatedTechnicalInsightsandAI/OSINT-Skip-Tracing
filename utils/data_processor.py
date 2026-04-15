@@ -181,6 +181,10 @@ class DataProcessor:
         recent_purchase = sale_dates.apply(
             lambda value: pd.notna(value) and value >= today - pd.Timedelta(days=183)
         )
+        peak_rate_purchase = sale_dates.apply(
+            lambda value: pd.notna(value)
+            and pd.Timestamp("2023-07-01") <= value <= pd.Timestamp("2024-09-30")
+        )
         dscr_window = sale_dates.apply(
             lambda value: pd.notna(value)
             and pd.Timestamp("2022-01-01") <= value <= pd.Timestamp("2023-12-31")
@@ -196,13 +200,18 @@ class DataProcessor:
         )
         dscr_flag = mtg.gt(0) & dscr_window
         equity_rich_flag = mtg.fillna(0).le(0) & old_hold
-        cashout_refi_flag = recent_purchase & sale_price.fillna(0).ge(250000) & confirmed_zero_mortgage
+        cashout_refi_flag = (
+            peak_rate_purchase
+            & sale_price.fillna(0).ge(250000)
+            & confirmed_zero_mortgage
+        )
 
         df["Fix & Flip Candidate"] = fix_flip_flag
         df["DSCR Prospect"] = dscr_flag
         df["Equity Rich Candidate"] = equity_rich_flag
         df["Recent Sale Candidate"] = recent_sale
         df["Recent Purchase Candidate"] = recent_purchase
+        df["Peak Rate Purchase Candidate"] = peak_rate_purchase
         df["Cash-Out Refi Candidate"] = cashout_refi_flag
 
         df["Lead Strategy"] = df.apply(self._pick_lead_strategy, axis=1)
@@ -229,7 +238,7 @@ class DataProcessor:
         score = 25
         if bool(row.get("Absentee Owner", False)):
             score += 15
-        if bool(row.get("Recent Purchase Candidate", False)):
+        if bool(row.get("Peak Rate Purchase Candidate", False)):
             score += 10
         if bool(row.get("Cash-Out Refi Candidate", False)):
             score += 30
@@ -334,6 +343,7 @@ class DataProcessor:
             "VI",
             "Absentee Owner",
             "Recent Purchase Candidate",
+            "Peak Rate Purchase Candidate",
             "Cash-Out Refi Candidate",
             "Fix & Flip Candidate",
             "DSCR Prospect",
