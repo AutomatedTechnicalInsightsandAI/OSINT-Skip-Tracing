@@ -1,5 +1,5 @@
 """
-Prime Coastal Funding — OSINT Lead Generation Dashboard
+Prime Coastal Funding â€” OSINT Lead Generation Dashboard
 ========================================================
 
 Run with:
@@ -8,10 +8,16 @@ Run with:
 
 from __future__ import annotations
 
-import asyncio
 import sys
 if sys.platform == "win32":
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    import asyncio
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        try:
+            asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        except AttributeError:
+            pass  # Python 3.16+ removed this, no longer needed
 
 import logging
 import traceback
@@ -26,13 +32,16 @@ from scrapers.sarasota_scraper import SarasotaScraper
 from utils.csv_exporter import CSVExporter
 from utils.data_processor import DataProcessor
 from ghl.ghl_streamlit_tab import render_ghl_tab
+from contracts.contracts_streamlit_tab import render_contracts_tab
+from financials.financial_streamlit_tab import render_financial_tab
+from ads.ad_streamlit_tab import render_ads_tab
 
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s – %(message)s",
+    format="%(asctime)s [%(levelname)s] %(name)s â€“ %(message)s",
 )
 logger = logging.getLogger(__name__)
 
@@ -40,8 +49,8 @@ logger = logging.getLogger(__name__)
 # Streamlit page config
 # ---------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Prime Coastal Funding – OSINT Lead Gen",
-    page_icon="🏖️",
+    page_title="Prime Coastal Funding â€“ OSINT Lead Gen",
+    page_icon="ðŸ–ï¸",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -57,17 +66,17 @@ COUNTY_SCRAPERS = {
 
 LEAD_TYPE_HELP = {
     LeadType.FLIPPER: (
-        "Properties with **2+ deed transfers within 12 months** — "
+        "Properties with **2+ deed transfers within 12 months** â€” "
         "likely fix-and-flip investors who may need short-term bridge financing."
     ),
     LeadType.HIGH_INTEREST: (
-        "Mortgage Deeds recorded in **2022–2023** (peak rate era) or properties "
-        "with **no recorded mortgage in the last 20 years** — strong DSCR / "
+        "Mortgage Deeds recorded in **2022â€“2023** (peak rate era) or properties "
+        "with **no recorded mortgage in the last 20 years** â€” strong DSCR / "
         "refinance candidates."
     ),
     LeadType.PAST_FINANCING: (
         "Records showing **Certificate of Title** or **Satisfaction of Mortgage** "
-        "— owners who recently cleared a lien and may be open to new financing."
+        "â€” owners who recently cleared a lien and may be open to new financing."
     ),
 }
 
@@ -87,7 +96,7 @@ def render_sidebar() -> dict:
     st.sidebar.caption("OSINT Lead Generation Platform")
     st.sidebar.divider()
 
-    st.sidebar.subheader("⚙️ Configuration")
+    st.sidebar.subheader("âš™ï¸ Configuration")
 
     selected_counties = st.sidebar.multiselect(
         "Florida Counties",
@@ -116,7 +125,7 @@ def render_sidebar() -> dict:
         "Headless Browser",
         value=False,
         help=(
-            "Uncheck (default) for headful mode — shows the browser window "
+            "Uncheck (default) for headful mode â€” shows the browser window "
             "and is less likely to be blocked by government portals."
         ),
     )
@@ -126,13 +135,13 @@ def render_sidebar() -> dict:
         value=False,
         help=(
             "Run Google Dorking to find email addresses for each owner. "
-            "This is slow (~10–20 s per owner). Disable for quick test runs."
+            "This is slow (~10â€“20 s per owner). Disable for quick test runs."
         ),
     )
 
     st.sidebar.divider()
     st.sidebar.info(
-        "ℹ️ All data is sourced from **free public government records**. "
+        "â„¹ï¸ All data is sourced from **free public government records**. "
         "No paid APIs are used."
     )
 
@@ -147,7 +156,7 @@ def render_sidebar() -> dict:
 
 def render_lead_type_info(lead_type: LeadType):
     """Render an informational expander for the selected lead type."""
-    with st.expander(f"ℹ️ About '{lead_type.value}' leads", expanded=False):
+    with st.expander(f"â„¹ï¸ About '{lead_type.value}' leads", expanded=False):
         st.markdown(LEAD_TYPE_HELP[lead_type])
 
 
@@ -163,21 +172,21 @@ def run_scrapers(config: dict) -> pd.DataFrame:
         return pd.DataFrame()
 
     all_records = []
-    progress_bar = st.progress(0, text="Initialising scrapers…")
-    status = st.status("Running scrapers…", expanded=True)
+    progress_bar = st.progress(0, text="Initialising scrapersâ€¦")
+    status = st.status("Running scrapersâ€¦", expanded=True)
 
     for idx, county_name in enumerate(counties):
         scraper_cls = COUNTY_SCRAPERS[county_name]
-        status.write(f"🔍 Scraping **{county_name}** county…")
+        status.write(f"ðŸ” Scraping **{county_name}** countyâ€¦")
         try:
             with scraper_cls(headless=headless) as scraper:
                 records = scraper.fetch_records(lead_type, max_results=max_results)
                 all_records.extend(records)
                 status.write(
-                    f"✅ {county_name}: found **{len(records)}** record(s)."
+                    f"âœ… {county_name}: found **{len(records)}** record(s)."
                 )
         except Exception as exc:
-            status.write(f"❌ {county_name} scraper failed: `{exc}`")
+            status.write(f"âŒ {county_name} scraper failed: `{exc}`")
             logger.error("Scraper %s failed: %s", county_name, traceback.format_exc())
 
         progress_bar.progress(
@@ -201,7 +210,7 @@ def run_scrapers(config: dict) -> pd.DataFrame:
         max_skip_trace_per_batch=20,
     )
 
-    with st.spinner("Processing and enriching data…"):
+    with st.spinner("Processing and enriching dataâ€¦"):
         df = processor.process(all_records)
 
     return df
@@ -214,10 +223,10 @@ def run_scrapers(config: dict) -> pd.DataFrame:
 
 def main():
     # ---- Header ----
-    st.title("🏖️ Prime Coastal Funding — OSINT Lead Generator")
+    st.title("ðŸ–ï¸ Prime Coastal Funding â€” OSINT Lead Generator")
     st.markdown(
         "Generate **commercial real estate leads** from Florida public property "
-        "records and enrich them with skip-traced contact information — "
+        "records and enrich them with skip-traced contact information â€” "
         "**no paid APIs required**."
     )
 
@@ -227,96 +236,112 @@ def main():
 
     st.divider()
 
-    # ---- Controls ----
-    col_btn, col_info = st.columns([1, 3])
-    with col_btn:
-        generate = st.button(
-            "🚀 Generate Leads",
-            type="primary",
-            use_container_width=True,
-        )
+    # ---- Always-visible tabs ----
+    tab_leads, tab_ghl, tab_ads, tab_contracts, tab_financials = st.tabs([
+        "ðŸ” Lead Generator",
+        "ðŸ“¤ Push to GHL",
+        "ðŸ“¢ Ad Templates",
+        "ðŸ“„ Contracts & Disputes",
+        "ðŸ’° Financial Model",
+    ])
 
-    with col_info:
-        st.markdown(
-            f"**Selected:** {', '.join(config['counties']) or 'None'} | "
-            f"**Lead type:** {config['lead_type'].value} | "
-            f"**Max per county:** {config['max_results']}"
-        )
-
-    # ---- Results area (persisted in session state) ----
-    if "results_df" not in st.session_state:
-        st.session_state["results_df"] = pd.DataFrame()
-
-    if generate:
-        st.session_state["results_df"] = run_scrapers(config)
-
-    df: pd.DataFrame = st.session_state["results_df"]
-
-    if df.empty:
-        st.info(
-            "Click **🚀 Generate Leads** to start scraping. "
-            "Results will appear here."
-        )
-        return
-
-    # ---- Tabs ----
-    tab_results, tab_ghl = st.tabs(["📋 Results", "📤 Push to GHL"])
-
-    with tab_results:
-        # ---- Metrics ----
-        st.subheader("📊 Results")
-        m1, m2, m3, m4 = st.columns(4)
-        m1.metric("Total Records", len(df))
-        email_col = "Scraped Emails"
-        emails_found = int(df[email_col].astype(bool).sum()) if email_col in df.columns else 0
-        m2.metric("Records with Emails", emails_found)
-        counties_col = "County"
-        county_count = df[counties_col].nunique() if counties_col in df.columns else 0
-        m3.metric("Counties Scraped", county_count)
-        absentee_col = "Absentee Owner"
-        absentee_count = int(df[absentee_col].fillna(False).astype(bool).sum()) if absentee_col in df.columns else 0
-        m4.metric("Absentee Owners", absentee_count)
-
-        display_df = df.copy()
-        if "Est Equity Pct" in display_df.columns:
-            display_df = display_df.sort_values(
-                by="Est Equity Pct",
-                ascending=False,
-                na_position="last",
+    with tab_leads:
+        # ---- Controls ----
+        col_btn, col_info = st.columns([1, 3])
+        with col_btn:
+            generate = st.button(
+                "ðŸš€ Generate Leads",
+                type="primary",
+                use_container_width=True,
             )
 
-        # ---- Data table ----
-        st.dataframe(
-            display_df,
-            use_container_width=True,
-            hide_index=True,
-        )
-
-        # ---- Download ----
-        st.divider()
-        csv_bytes = CSVExporter.to_bytes(df)
-        st.download_button(
-            label="⬇️ Download CSV",
-            data=csv_bytes,
-            file_name="prime_coastal_leads.csv",
-            mime="text/csv",
-            type="secondary",
-            use_container_width=False,
-        )
-
-        # ---- Per-county breakdown ----
-        if counties_col in df.columns and df[counties_col].nunique() > 1:
-            st.subheader("County Breakdown")
-            breakdown = (
-                df.groupby(counties_col)
-                .size()
-                .reset_index(name="Records")
-                .sort_values("Records", ascending=False)
+        with col_info:
+            st.markdown(
+                f"**Selected:** {', '.join(config['counties']) or 'None'} | "
+                f"**Lead type:** {config['lead_type'].value} | "
+                f"**Max per county:** {config['max_results']}"
             )
-            st.bar_chart(breakdown.set_index(counties_col))
+
+        # ---- Results area (persisted in session state) ----
+        if "results_df" not in st.session_state:
+            st.session_state["results_df"] = pd.DataFrame()
+
+        if generate:
+            st.session_state["results_df"] = run_scrapers(config)
+
+        df: pd.DataFrame = st.session_state["results_df"]
+
+        if df.empty:
+            st.info(
+                "Click **ðŸš€ Generate Leads** to start scraping. "
+                "Results will appear here."
+            )
+        else:
+            # ---- Metrics ----
+            st.subheader("ðŸ“Š Results")
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Total Records", len(df))
+            email_col = "Scraped Emails"
+            emails_found = int(df[email_col].astype(bool).sum()) if email_col in df.columns else 0
+            m2.metric("Records with Emails", emails_found)
+            counties_col = "County"
+            county_count = df[counties_col].nunique() if counties_col in df.columns else 0
+            m3.metric("Counties Scraped", county_count)
+            absentee_col = "Absentee Owner"
+            absentee_count = int(df[absentee_col].fillna(False).astype(bool).sum()) if absentee_col in df.columns else 0
+            m4.metric("Absentee Owners", absentee_count)
+
+            display_df = df.copy()
+            if "Est Equity Pct" in display_df.columns:
+                display_df = display_df.sort_values(
+                    by="Est Equity Pct",
+                    ascending=False,
+                    na_position="last",
+                )
+
+            # ---- Data table ----
+            st.dataframe(
+                display_df,
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            # ---- Download ----
+            st.divider()
+            csv_bytes = CSVExporter.to_bytes(df)
+            st.download_button(
+                label="â¬‡ï¸ Download CSV",
+                data=csv_bytes,
+                file_name="prime_coastal_leads.csv",
+                mime="text/csv",
+                type="secondary",
+                use_container_width=False,
+            )
+
+            # ---- Per-county breakdown ----
+            if counties_col in df.columns and df[counties_col].nunique() > 1:
+                st.subheader("County Breakdown")
+                breakdown = (
+                    df.groupby(counties_col)
+                    .size()
+                    .reset_index(name="Records")
+                    .sort_values("Records", ascending=False)
+                )
+                st.bar_chart(breakdown.set_index(counties_col))
+
+    df = st.session_state.get("results_df", pd.DataFrame())
 
     with tab_ghl:
         render_ghl_tab(df)
+
+    with tab_ads:
+        render_ads_tab(df)
+
+    with tab_contracts:
+        render_contracts_tab(df)
+
+    with tab_financials:
+        render_financial_tab(df)
 
 
 if __name__ == "__main__":
