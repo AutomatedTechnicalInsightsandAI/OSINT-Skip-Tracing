@@ -276,7 +276,7 @@ def render_ads_tab(df: pd.DataFrame) -> None:
             })
 
     kw_df = pd.DataFrame(kw_rows)
-    st.dataframe(kw_df, use_container_width=True, hide_index=True)
+    st.dataframe(kw_df, width="stretch", hide_index=True)
 
     csv_bytes = kw_df.to_csv(index=False).encode("utf-8")
     st.download_button(

@@ -121,7 +121,7 @@ def _render_contract_tab() -> None:
         )
 
         submitted = st.form_submit_button(
-            "Generate MSA + Addendum", type="primary", use_container_width=True
+            "Generate MSA + Addendum", type="primary", width="stretch"
         )
 
     if submitted:
@@ -200,7 +200,7 @@ def _render_dispute_tab() -> None:
         )
 
         evaluate = st.form_submit_button(
-            "Submit & Evaluate Dispute", type="primary", use_container_width=True
+            "Submit & Evaluate Dispute", type="primary", width="stretch"
         )
 
     if evaluate:
@@ -265,7 +265,7 @@ def _render_dispute_tab() -> None:
         history_df = pd.DataFrame(
             st.session_state[history_key][-20:][::-1]
         )
-        st.dataframe(history_df, use_container_width=True, hide_index=True)
+        st.dataframe(history_df, width="stretch", hide_index=True)
 
 
 # ---------------------------------------------------------------------------
@@ -312,7 +312,7 @@ def _render_invoice_tab(df: pd.DataFrame) -> None:
             )
 
     generate_inv = st.button(
-        "Generate Invoice", type="primary", use_container_width=False
+        "Generate Invoice", type="primary", width="content"
     )
 
     if generate_inv:
@@ -357,7 +357,7 @@ def _render_invoice_tab(df: pd.DataFrame) -> None:
         if invoice["line_items"]:
             st.dataframe(
                 pd.DataFrame(invoice["line_items"]),
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
             )
         else:

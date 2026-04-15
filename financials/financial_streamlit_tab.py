@@ -140,7 +140,7 @@ def render_financial_tab(df: pd.DataFrame) -> None:
             return f"color: {color}; font-weight: bold"
 
         styled = table_df.style.map(_color_margin, subset=["Gross Margin %"])
-        st.dataframe(styled, use_container_width=True, hide_index=True)
+        st.dataframe(styled, width="stretch", hide_index=True)
 
         st.divider()
 
@@ -161,7 +161,7 @@ def render_financial_tab(df: pd.DataFrame) -> None:
             text_auto=".1f",
         )
         fig_bar.update_layout(showlegend=False, coloraxis_showscale=False)
-        st.plotly_chart(fig_bar, use_container_width=True)
+        st.plotly_chart(fig_bar, width="stretch")
 
         # --- Scatter: LTV vs CAC across all verticals ---
         st.subheader("LTV vs CAC — All Verticals")
@@ -188,7 +188,7 @@ def render_financial_tab(df: pd.DataFrame) -> None:
             title="LTV vs CAC (bubble size = lead price)",
             log_y=True,
         )
-        st.plotly_chart(fig_scatter, use_container_width=True)
+        st.plotly_chart(fig_scatter, width="stretch")
 
     # ======================================================================
     # TAB 2 — Break-Even Calculator
@@ -271,7 +271,7 @@ def render_financial_tab(df: pd.DataFrame) -> None:
             )
         )
         wf_fig.update_layout(title="Monthly P&L Waterfall", showlegend=False)
-        st.plotly_chart(wf_fig, use_container_width=True)
+        st.plotly_chart(wf_fig, width="stretch")
 
         st.divider()
 
@@ -325,7 +325,7 @@ def render_financial_tab(df: pd.DataFrame) -> None:
                     markers=True,
                 )
                 fig_sens.add_hline(y=0, line_dash="dash", line_color="red", annotation_text="Break-even")
-                st.plotly_chart(fig_sens, use_container_width=True)
+                st.plotly_chart(fig_sens, width="stretch")
 
     # ======================================================================
     # TAB 3 — 12-Month Projections
@@ -395,7 +395,7 @@ def render_financial_tab(df: pd.DataFrame) -> None:
             title="Monthly Recurring Revenue — 3 Scenarios",
             markers=True,
         )
-        st.plotly_chart(fig_mrr, use_container_width=True)
+        st.plotly_chart(fig_mrr, width="stretch")
 
         # --- Net profit bar chart ---
         fig_profit = px.bar(
@@ -408,11 +408,11 @@ def render_financial_tab(df: pd.DataFrame) -> None:
             labels={"Net_Profit": "Net Profit ($)"},
         )
         fig_profit.update_layout(coloraxis_showscale=False)
-        st.plotly_chart(fig_profit, use_container_width=True)
+        st.plotly_chart(fig_profit, width="stretch")
 
         # --- Full projection table ---
         with st.expander("📋 Full 12-Month Projection Table"):
-            st.dataframe(base_df, use_container_width=True, hide_index=True)
+            st.dataframe(base_df, width="stretch", hide_index=True)
 
         # --- Download ---
         csv_buf = io.StringIO()
@@ -463,7 +463,7 @@ def render_financial_tab(df: pd.DataFrame) -> None:
             return colors.get(val, "")
 
         styled_ranker = ranker_df.style.map(_color_tier, subset=["Tier"])
-        st.dataframe(styled_ranker, use_container_width=True, hide_index=True)
+        st.dataframe(styled_ranker, width="stretch", hide_index=True)
 
         # --- Horizontal bar chart ---
         rank_chart_df = pd.DataFrame(
@@ -483,7 +483,7 @@ def render_financial_tab(df: pd.DataFrame) -> None:
             title=f"Top {top_n} Sub-Verticals by Gross Margin",
             text_auto=".1f",
         )
-        st.plotly_chart(fig_rank, use_container_width=True)
+        st.plotly_chart(fig_rank, width="stretch")
 
         # --- Download ---
         csv_buf2 = io.StringIO()

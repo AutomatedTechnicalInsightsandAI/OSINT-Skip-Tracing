@@ -79,7 +79,7 @@ def render_ghl_tab(df: pd.DataFrame) -> None:
     push_clicked = st.button(
         "🚀 Push All to GHL",
         type="primary",
-        use_container_width=False,
+        width="content",
         key="push_to_ghl",
     )
 
