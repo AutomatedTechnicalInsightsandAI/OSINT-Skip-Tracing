@@ -46,6 +46,8 @@ class SarasotaScraper(BaseScraper):
     CASHOUT_LOOKBACK_DAYS = 183
     CASHOUT_MIN_SALE_PRICE = 250_000
     MORTGAGE_LOOKAROUND_DAYS = 14
+    CASHOUT_CANDIDATE_MULTIPLIER = 2
+    CASHOUT_MIN_CANDIDATES_TO_CHECK = 75
     TARGET_QUALIFICATION_CODES = {"01"}
 
     @property
@@ -441,6 +443,19 @@ class SarasotaScraper(BaseScraper):
                 logger.info("Sarasota cash-out refi: no PA sales returned")
                 return records
 
+            candidate_limit = min(
+                len(sales),
+                max(
+                    max_results * self.CASHOUT_CANDIDATE_MULTIPLIER,
+                    self.CASHOUT_MIN_CANDIDATES_TO_CHECK,
+                ),
+            )
+            sales = sales[:candidate_limit]
+            logger.info(
+                "Sarasota cash-out refi: checking %d candidate sales for no-purchase-mortgage",
+                len(sales),
+            )
+
             page = self.new_page()
             checked = 0
             for sale in sales:
@@ -453,7 +468,26 @@ class SarasotaScraper(BaseScraper):
                     continue
 
                 checked += 1
-                has_mortgage = self._has_purchase_mortgage(page, owner_name, sale_date)
+                if checked == 1 or checked % 10 == 0:
+                    logger.info(
+                        "Sarasota cash-out refi: mortgage-check progress %d/%d, leads found %d",
+                        checked,
+                        len(sales),
+                        len(records),
+                    )
+
+                try:
+                    has_mortgage = self._has_purchase_mortgage(page, owner_name, sale_date)
+                except Exception as exc:
+                    if self._is_target_closed_error(exc):
+                        logger.warning(
+                            "Sarasota cash-out refi interrupted after %d checks; returning %d partial leads",
+                            checked - 1,
+                            len(records),
+                        )
+                        break
+                    raise
+
                 if has_mortgage:
                     continue
 
@@ -667,6 +701,11 @@ class SarasotaScraper(BaseScraper):
             return float(cleaned)
         except ValueError:
             return 0.0
+
+    @staticmethod
+    def _is_target_closed_error(exc: Exception) -> bool:
+        text = repr(exc)
+        return "TargetClosedError" in text or "Target page, context or browser has been closed" in text
 
     # ------------------------------------------------------------------
     # Lead-type specific scrapers
