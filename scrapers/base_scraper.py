@@ -8,10 +8,12 @@ scrapers can extend.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 import re
 import time
+import warnings
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -220,6 +222,13 @@ class BaseScraper(ABC):
     def start_browser(self):
         """Launch a Playwright Chromium browser (headful by default)."""
         try:
+            if hasattr(asyncio, "WindowsProactorEventLoopPolicy"):
+                # Playwright launches a driver subprocess; on Windows this needs
+                # a Proactor-based event loop policy in the current process.
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", DeprecationWarning)
+                    asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
+
             from playwright.sync_api import sync_playwright  # noqa: PLC0415
 
             self._playwright = sync_playwright().start()
