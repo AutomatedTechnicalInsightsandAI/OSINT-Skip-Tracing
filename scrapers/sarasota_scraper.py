@@ -45,10 +45,12 @@ class SarasotaScraper(BaseScraper):
     }
     CASHOUT_LOOKBACK_DAYS = 183
     CASHOUT_MIN_SALE_PRICE = 250_000
-    MORTGAGE_LOOKAROUND_DAYS = 14
+    MORTGAGE_LOOKBACK_DAYS = 7
+    MORTGAGE_LOOKAHEAD_DAYS = 21
     CASHOUT_CANDIDATE_MULTIPLIER = 2
     CASHOUT_MIN_CANDIDATES_TO_CHECK = 75
     TARGET_QUALIFICATION_CODES = {"01"}
+    NON_PERSON_TOKENS = {"TRUST", "TR", "TTEE", "TRUSTEE", "LLC", "INC", "CORP", "CORPORATION", "LP", "LTD", "LC", "CO"}
 
     @property
     def county_name(self) -> str:
@@ -464,6 +466,7 @@ class SarasotaScraper(BaseScraper):
 
                 owner_name = sale.get("owner_name", "")
                 sale_date = sale.get("last_sale_date", "")
+                search_names = sale.get("search_names", [])
                 if not owner_name or not sale_date:
                     continue
 
@@ -477,7 +480,12 @@ class SarasotaScraper(BaseScraper):
                     )
 
                 try:
-                    has_mortgage = self._has_purchase_mortgage(page, owner_name, sale_date)
+                    has_mortgage = self._has_purchase_mortgage(
+                        page,
+                        owner_name,
+                        sale_date,
+                        search_names=search_names,
+                    )
                 except Exception as exc:
                     if self._is_target_closed_error(exc):
                         logger.warning(
@@ -509,7 +517,8 @@ class SarasotaScraper(BaseScraper):
                         mtg_amt_at_purchase="0",
                         mtg_amt_source=(
                             f"No Sarasota mortgage record found within +/- "
-                            f"{self.MORTGAGE_LOOKAROUND_DAYS} days of sale date"
+                            f"{self.MORTGAGE_LOOKBACK_DAYS}/{self.MORTGAGE_LOOKAHEAD_DAYS} "
+                            f"days of sale date"
                         ),
                         year_built=sale.get("year_built", ""),
                         property_type=sale.get("property_type", ""),
@@ -629,6 +638,7 @@ class SarasotaScraper(BaseScraper):
                     "taxable_value": self._clean_currency(row.get("Taxable Value", "")),
                     "year_built": (row.get("Year Built", "") or "").strip(),
                     "property_type": (row.get("Description", "") or "").strip(),
+                    "search_names": self._build_search_names(owners),
                 }
             )
 
@@ -639,54 +649,73 @@ class SarasotaScraper(BaseScraper):
         logger.info("Sarasota PA export returned %d recent high-price sales", len(sales))
         return sales
 
-    def _has_purchase_mortgage(self, page, owner_name: str, sale_date: str) -> bool:
+    def _has_purchase_mortgage(
+        self,
+        page,
+        owner_name: str,
+        sale_date: str,
+        search_names: list[str] | None = None,
+    ) -> bool:
         """Return True when Sarasota Official Records shows a mortgage near closing."""
         sale_dt = parse_record_date(sale_date)
         if not sale_dt:
             return False
 
-        party_last, party_first = self._split_owner_search_name(owner_name)
-        if not party_last:
+        search_names = search_names or self._build_search_names([owner_name])
+        if not search_names:
             return False
 
-        date_from = (sale_dt - timedelta(days=self.MORTGAGE_LOOKAROUND_DAYS)).strftime("%m/%d/%Y")
-        date_to = (sale_dt + timedelta(days=self.MORTGAGE_LOOKAROUND_DAYS)).strftime("%m/%d/%Y")
-        self._search_official_records(
-            page,
-            "MORTGAGE",
-            date_from,
-            date_to,
-            party_last=party_last,
-            party_first=party_first,
-        )
+        date_from = (sale_dt - timedelta(days=self.MORTGAGE_LOOKBACK_DAYS)).strftime("%m/%d/%Y")
+        date_to = (sale_dt + timedelta(days=self.MORTGAGE_LOOKAHEAD_DAYS)).strftime("%m/%d/%Y")
 
-        rows = self._parse_results(page)
-        if not rows:
-            return False
+        for search_name in search_names:
+            party_last, party_first = self._split_owner_search_name(search_name)
+            if not party_last:
+                continue
 
-        normalized_target = self._normalize_name(owner_name)
-        for row in rows:
-            row_name = self._normalize_name(row.get("grantee", ""))
-            if normalized_target and normalized_target == row_name:
-                return True
-            if normalized_target and normalized_target in row_name:
-                return True
-            if row_name and party_last.upper() in row_name:
-                return True
+            logger.info(
+                "Sarasota cash-out refi: mortgage search for '%s' using last/business='%s' first='%s' dates %s..%s",
+                search_name,
+                party_last,
+                party_first,
+                date_from,
+                date_to,
+            )
+
+            self._search_official_records(
+                page,
+                "MORTGAGE",
+                date_from,
+                date_to,
+                party_last=party_last,
+                party_first=party_first,
+            )
+
+            rows = self._parse_results(page)
+            if not rows:
+                continue
+
+            normalized_target = self._normalize_name(search_name)
+            for row in rows:
+                row_name = self._normalize_name(row.get("grantee", ""))
+                if normalized_target and normalized_target == row_name:
+                    return True
+                if normalized_target and normalized_target in row_name:
+                    return True
+                if row_name and party_last.upper() in row_name:
+                    return True
         return False
 
-    @staticmethod
-    def _split_owner_search_name(owner_name: str) -> tuple[str, str]:
-        """Split Sarasota PA owner text into OR party search fields."""
-        clean = " ".join((owner_name or "").replace("&", " ").split())
+    def _split_owner_search_name(self, owner_name: str) -> tuple[str, str]:
+        """Split a single cleaned owner name into Sarasota clerk search fields."""
+        clean = self._clean_owner_name(owner_name)
         if not clean:
             return "", ""
 
-        company_tokens = {"LLC", "INC", "CORP", "CORPORATION", "LP", "LTD", "TRUST", "LC", "CO"}
         parts = clean.split()
-        if len(parts) == 1 or any(token.upper().strip(".,") in company_tokens for token in parts):
+        if len(parts) == 1 or any(token.upper().strip(".,") in self.NON_PERSON_TOKENS for token in parts):
             return clean, ""
-        return parts[0], " ".join(parts[1:])
+        return parts[0], parts[1]
 
     @staticmethod
     def _normalize_name(value: str) -> str:
@@ -701,6 +730,53 @@ class SarasotaScraper(BaseScraper):
             return float(cleaned)
         except ValueError:
             return 0.0
+
+    def _build_search_names(self, owners: list[str]) -> list[str]:
+        """Build ordered mortgage-search names from PA owner fields."""
+        search_names: list[str] = []
+        for owner in owners:
+            cleaned = self._clean_owner_name(owner)
+            if not cleaned:
+                continue
+            if cleaned not in search_names:
+                search_names.append(cleaned)
+
+        person_names = [
+            name
+            for name in search_names
+            if not any(token in self.NON_PERSON_TOKENS for token in name.upper().split())
+        ]
+        if person_names:
+            return person_names[:2]
+        return search_names[:1]
+
+    @staticmethod
+    def _clean_owner_name(owner_name: str) -> str:
+        """Normalize PA owner text into a clerk-search-friendly name."""
+        clean = (owner_name or "").upper()
+        clean = clean.replace("&", " ")
+        clean = clean.replace("/", " ")
+        clean = clean.replace(",", " ")
+        clean = clean.replace("(", " ").replace(")", " ")
+        clean = " ".join(clean.split())
+
+        filtered_tokens: list[str] = []
+        for token in clean.split():
+            stripped = token.strip(".,")
+            normalized = stripped.replace("-", "")
+            if not stripped:
+                continue
+            if stripped.isdigit():
+                continue
+            if stripped in {"1", "2", "3", "1/2", "1/3", "2/3"}:
+                continue
+            if len(stripped) == 1 and stripped.isdigit():
+                continue
+            if normalized in {"COTTEE", "TTEE", "TRUSTEE", "COEXECUTOR", "EXECUTOR"}:
+                continue
+            filtered_tokens.append(stripped)
+
+        return " ".join(filtered_tokens).strip()
 
     @staticmethod
     def _is_target_closed_error(exc: Exception) -> bool:
