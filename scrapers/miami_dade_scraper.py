@@ -63,6 +63,8 @@ class MiamiDadeScraper(BaseScraper):
             return self._fetch_flippers(max_results)
         if lead_type == LeadType.HIGH_INTEREST:
             return self._fetch_high_interest(max_results)
+        if lead_type == LeadType.MATURING_COMMERCIAL_DEBT:
+            return []
         if lead_type == LeadType.PAST_FINANCING:
             return self._fetch_past_financing(max_results)
         return []
