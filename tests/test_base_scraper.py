@@ -27,6 +27,8 @@ def test_lead_type_values():
     assert LeadType.CASHOUT_REFI.value == "Recent Purchase Cash-Out Refi Prospects"
     assert LeadType.FLIPPER.value == "Fix & Flip Investors"
     assert LeadType.HIGH_INTEREST.value == "High Interest / High Equity (DSCR Prospects)"
+    assert LeadType.MATURING_COMMERCIAL_DEBT.value == "Maturing Commercial Debt (Balloon Prospects)"
+    assert LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON.value == "Sarasota Personal Commercial Balloon Clients"
     assert LeadType.PAST_FINANCING.value == "Past Financing (Satisfied Mortgage / Certificate of Title)"
 
 

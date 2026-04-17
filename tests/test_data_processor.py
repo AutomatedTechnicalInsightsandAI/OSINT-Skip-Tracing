@@ -128,6 +128,81 @@ def test_process_flags_cashout_refi_candidates(processor_no_skip):
     assert row["Lead Strategy"] == LeadType.CASHOUT_REFI.value
 
 
+def test_process_flags_maturing_loan_candidates(processor_no_skip):
+    upcoming = (datetime.now() + timedelta(days=180)).strftime("%B %d, %Y")
+    record = PropertyRecord(
+        owner_name="Balloon Borrower",
+        property_address="99 Finance Way, Sarasota, FL",
+        mailing_address="PO Box 99, Tampa, FL",
+        last_sale_date="06/15/2023",
+        county="Sarasota",
+        lead_type=LeadType.HIGH_INTEREST.value,
+        sale_price="650000",
+        just_value="800000",
+        assessed_value="700000",
+        taxable_value="700000",
+        mtg_amt_at_purchase="250000",
+        lender_name="Bank of America, N. A",
+        maturity_date=upcoming,
+    )
+    df = processor_no_skip.process([record])
+    row = df.iloc[0]
+    assert bool(row["Maturing Loan Candidate"]) is True
+    assert row["Lead Strategy"] == "Maturing Debt Refi (Balloon Candidate)"
+    assert float(row["Months To Maturity"]) > 0
+
+
+def test_process_preserves_dedicated_maturing_commercial_debt_lead_type(processor_no_skip):
+    upcoming = (datetime.now() + timedelta(days=180)).strftime("%B %d, %Y")
+    record = PropertyRecord(
+        owner_name="SUNCOAST OFFICE PARK LLC",
+        property_address="100 Commerce Blvd, Sarasota, FL",
+        mailing_address="200 Finance Way, Tampa, FL",
+        last_sale_date="06/15/2021",
+        county="Sarasota",
+        lead_type=LeadType.MATURING_COMMERCIAL_DEBT.value,
+        sale_price="1500000",
+        just_value="1800000",
+        assessed_value="1600000",
+        taxable_value="1600000",
+        mtg_amt_at_purchase="950000",
+        lender_name="Regional Bank",
+        maturity_date=upcoming,
+    )
+    df = processor_no_skip.process([record])
+    row = df.iloc[0]
+    assert bool(row["Maturing Loan Candidate"]) is True
+    assert row["Lead Strategy"] == LeadType.MATURING_COMMERCIAL_DEBT.value
+    assert int(row["Lead Score"]) >= 35
+
+
+def test_process_preserves_targeted_sarasota_client_lead_type(processor_no_skip):
+    upcoming = (datetime.now() + timedelta(days=120)).strftime("%B %d, %Y")
+    record = PropertyRecord(
+        owner_name="LISA K SNYDER",
+        property_address="100 Commerce Blvd, Sarasota, FL",
+        mailing_address="200 Finance Way, Tampa, FL",
+        last_sale_date="06/15/2021",
+        estimated_interest_rate="8.75%",
+        county="Sarasota",
+        lead_type=LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON.value,
+        sale_price="950000",
+        just_value="1200000",
+        assessed_value="1100000",
+        taxable_value="1100000",
+        mtg_amt_at_purchase="700000",
+        lender_name="Regional Bank",
+        maturity_date=upcoming,
+        property_type="Commercial Office",
+        current_exemptions="0",
+    )
+    df = processor_no_skip.process([record])
+    row = df.iloc[0]
+    assert bool(row["Maturing Loan Candidate"]) is True
+    assert row["Lead Strategy"] == LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON.value
+    assert row["Current Exemptions"] == "0"
+
+
 # ---------------------------------------------------------------------------
 # CSVExporter
 # ---------------------------------------------------------------------------

@@ -145,12 +145,22 @@ class DataProcessor:
             if "Last Sale Date" in df.columns
             else pd.Series([pd.NaT] * len(df))
         )
+        maturity_dates = (
+            df["Maturity Date"].apply(self._parse_date)
+            if "Maturity Date" in df.columns
+            else pd.Series([pd.NaT] * len(df))
+        )
         df["Sale Year"] = sale_dates.apply(
             lambda value: int(value.year) if pd.notna(value) else pd.NA
         )
         today = pd.Timestamp(datetime.now().date())
         df["Years Since Sale"] = sale_dates.apply(
             lambda value: round((today - value).days / 365.25, 1)
+            if pd.notna(value)
+            else pd.NA
+        )
+        df["Months To Maturity"] = maturity_dates.apply(
+            lambda value: round((value - today).days / 30.44, 1)
             if pd.notna(value)
             else pd.NA
         )
@@ -205,6 +215,10 @@ class DataProcessor:
             & sale_price.fillna(0).ge(250000)
             & confirmed_zero_mortgage
         )
+        maturing_loan_flag = maturity_dates.apply(
+            lambda value: pd.notna(value)
+            and today <= value <= today + pd.Timedelta(days=365)
+        )
 
         df["Fix & Flip Candidate"] = fix_flip_flag
         df["DSCR Prospect"] = dscr_flag
@@ -213,6 +227,7 @@ class DataProcessor:
         df["Recent Purchase Candidate"] = recent_purchase
         df["Peak Rate Purchase Candidate"] = peak_rate_purchase
         df["Cash-Out Refi Candidate"] = cashout_refi_flag
+        df["Maturing Loan Candidate"] = maturing_loan_flag
 
         df["Lead Strategy"] = df.apply(self._pick_lead_strategy, axis=1)
         df["Lead Score"] = df.apply(self._score_lead, axis=1)
@@ -225,6 +240,13 @@ class DataProcessor:
     def _pick_lead_strategy(row: pd.Series) -> str:
         if bool(row.get("Cash-Out Refi Candidate", False)):
             return LeadType.CASHOUT_REFI.value
+        if row.get("Lead Type", "") in {
+            LeadType.MATURING_COMMERCIAL_DEBT.value,
+            LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON.value,
+        }:
+            return row.get("Lead Type", "")
+        if bool(row.get("Maturing Loan Candidate", False)):
+            return "Maturing Debt Refi (Balloon Candidate)"
         if bool(row.get("DSCR Prospect", False)):
             return LeadType.HIGH_INTEREST.value
         if bool(row.get("Equity Rich Candidate", False)):
@@ -238,10 +260,17 @@ class DataProcessor:
         score = 25
         if bool(row.get("Absentee Owner", False)):
             score += 15
+        if row.get("Lead Type", "") in {
+            LeadType.MATURING_COMMERCIAL_DEBT.value,
+            LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON.value,
+        }:
+            score += 10
         if bool(row.get("Peak Rate Purchase Candidate", False)):
             score += 10
         if bool(row.get("Cash-Out Refi Candidate", False)):
             score += 30
+        if bool(row.get("Maturing Loan Candidate", False)):
+            score += 25
         if bool(row.get("Fix & Flip Candidate", False)):
             score += 20
         if bool(row.get("DSCR Prospect", False)):
@@ -328,13 +357,18 @@ class DataProcessor:
             "Lead Strategy",
             "Lead Score",
             "Property Type",
+            "Current Exemptions",
             "Parcel ID",
             "Sale Price",
             "Just Value",
             "Assessed Value",
             "Taxable Value",
+            "Instrument Number",
             "Mtg Amt At Purchase",
             "Mtg Amt Source",
+            "Lender Name",
+            "Maturity Date",
+            "Months To Maturity",
             "Mortgage Balance",
             "Equity",
             "Est Equity Pct",
@@ -345,8 +379,11 @@ class DataProcessor:
             "Recent Purchase Candidate",
             "Peak Rate Purchase Candidate",
             "Cash-Out Refi Candidate",
+            "Maturing Loan Candidate",
             "Fix & Flip Candidate",
             "DSCR Prospect",
             "Equity Rich Candidate",
+            "PDF Extraction Method",
+            "View Image URL",
             "Lead Source",
         ]

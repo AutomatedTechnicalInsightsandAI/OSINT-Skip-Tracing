@@ -31,6 +31,8 @@ class LeadType(str, Enum):
     CASHOUT_REFI = "Recent Purchase Cash-Out Refi Prospects"
     FLIPPER = "Fix & Flip Investors"
     HIGH_INTEREST = "High Interest / High Equity (DSCR Prospects)"
+    MATURING_COMMERCIAL_DEBT = "Maturing Commercial Debt (Balloon Prospects)"
+    SARASOTA_PERSONAL_COMMERCIAL_BALLOON = "Sarasota Personal Commercial Balloon Clients"
     PAST_FINANCING = "Past Financing (Satisfied Mortgage / Certificate of Title)"
 
 
@@ -53,10 +55,16 @@ class PropertyRecord:
     just_value: str = ""
     assessed_value: str = ""
     taxable_value: str = ""
+    instrument_number: str = ""
     mtg_amt_at_purchase: str = ""
     mtg_amt_source: str = ""
+    lender_name: str = ""
+    maturity_date: str = ""
+    pdf_extraction_method: str = ""
+    view_image_url: str = ""
     year_built: str = ""
     property_type: str = ""
+    current_exemptions: str = ""
     vacant_improved: str = ""
     absentee_owner: str = ""
     lead_source: str = "OSINT Scraper"
@@ -79,10 +87,16 @@ class PropertyRecord:
             "Just Value": self.just_value,
             "Assessed Value": self.assessed_value,
             "Taxable Value": self.taxable_value,
+            "Instrument Number": self.instrument_number,
             "Mtg Amt At Purchase": self.mtg_amt_at_purchase,
             "Mtg Amt Source": self.mtg_amt_source,
+            "Lender Name": self.lender_name,
+            "Maturity Date": self.maturity_date,
+            "PDF Extraction Method": self.pdf_extraction_method,
+            "View Image URL": self.view_image_url,
             "Year Built": self.year_built,
             "Property Type": self.property_type,
+            "Current Exemptions": self.current_exemptions,
             "VI": self.vacant_improved,
             "Absentee Owner": self.absentee_owner,
             "Lead Source": self.lead_source,

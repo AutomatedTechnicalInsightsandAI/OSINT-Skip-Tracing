@@ -16,10 +16,11 @@ import csv
 import io
 import json
 import logging
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import List
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urljoin, urlparse, parse_qs
 import requests
 
 from scrapers.base_scraper import (
@@ -29,6 +30,7 @@ from scrapers.base_scraper import (
     estimate_interest_rate,
     parse_record_date,
 )
+from utils.pdf_reader import extract_mortgage_document_info
 
 logger = logging.getLogger(__name__)
 
@@ -55,10 +57,182 @@ class SarasotaScraper(BaseScraper):
     TARGET_QUALIFICATION_CODES = {"01"}
     NON_PERSON_TOKENS = {"TRUST", "TR", "TTEE", "TRUSTEE", "LLC", "INC", "CORP", "CORPORATION", "LP", "LTD", "LC", "CO"}
     CACHE_PATH = Path(".cache") / "sarasota_mortgage_lookup.json"
+    MATURING_SEARCH_YEARS = (2021, 2020, 2019, 2018, 2017, 2016, 2015)
+    MATURING_SCAN_LIMIT_MULTIPLIER = 12
+    MATURING_SCAN_MINIMUM = 60
+    TARGETED_BALLOON_WINDOW_DAYS = 183
+    TARGETED_MIN_INTEREST_RATE = 8.0
+    COMMERCIAL_ENTITY_TOKENS = {
+        "LLC",
+        "L.L.C",
+        "INC",
+        "CORP",
+        "CORPORATION",
+        "LP",
+        "L.P",
+        "LLP",
+        "LTD",
+        "LIMITED",
+        "COMPANY",
+        "PARTNERSHIP",
+        "PARTNERS",
+        "HOLDINGS",
+        "PROPERTIES",
+        "PROPERTY",
+        "INVESTMENTS",
+        "VENTURES",
+        "ENTERPRISES",
+        "GROUP",
+        "REALTY",
+        "DEVELOPMENT",
+        "MANAGEMENT",
+        "APARTMENTS",
+        "OFFICE",
+        "INDUSTRIAL",
+        "WAREHOUSE",
+        "RETAIL",
+        "HOTEL",
+        "MOTEL",
+        "STORAGE",
+        "MEDICAL",
+    }
+    COMMERCIAL_DOC_PHRASES = {
+        "COMMERCIAL",
+        "BUSINESS PURPOSE",
+        "ASSIGNMENT OF LEASES AND RENTS",
+        "ASSIGNMENT OF RENTS",
+        "SECURITY AGREEMENT",
+        "FIXTURE FILING",
+        "UCC",
+        "LOAN AGREEMENT",
+        "ENVIRONMENTAL INDEMNITY",
+        "RENTS AND PROFITS",
+    }
+    CONSUMER_DOC_PHRASES = {
+        "HOME EQUITY LINE OF CREDIT",
+        "EQUITY LINE OF CREDIT",
+        "ONE-TO-FOUR FAMILY",
+        "1-4 FAMILY",
+        "PLANNED UNIT DEVELOPMENT RIDER",
+        "CONDOMINIUM RIDER",
+        "SECOND HOME RIDER",
+        "FHA",
+        "VA GUARANTEED",
+    }
+    COMMERCIAL_PROPERTY_HINTS = {
+        "COMMERCIAL",
+        "OFFICE",
+        "RETAIL",
+        "STORE",
+        "WAREHOUSE",
+        "INDUSTRIAL",
+        "MIXED USE",
+        "MIXED-USE",
+        "APARTMENT",
+        "MULTIFAMILY",
+        "MULTI FAMILY",
+        "HOTEL",
+        "MOTEL",
+        "MARINA",
+        "MEDICAL",
+        "PROFESSIONAL",
+        "RESTAURANT",
+        "SHOPPING",
+        "SELF STORAGE",
+        "STORAGE",
+        "CHURCH",
+        "VACANT COMMERCIAL",
+    }
+    RESIDENTIAL_PROPERTY_HINTS = {
+        "SINGLE FAMILY",
+        "CONDOMINIUM",
+        "CONDO",
+        "TOWNHOUSE",
+        "RESIDENTIAL",
+        "MOBILE HOME",
+        "VACANT RESIDENTIAL",
+        "HOMESTEAD",
+    }
+    OWNER_SEARCH_STOPWORDS = {
+        "THE",
+        "OF",
+        "AND",
+        "DATED",
+        "ALL",
+        "AMENDMENTS",
+        "THERETO",
+        "THERET",
+        "AGREEMENT",
+        "TRUSTEE",
+        "TRUSTEES",
+    }
+    INSTITUTIONAL_NAME_TOKENS = {
+        "BANK",
+        "BANCORP",
+        "CREDIT",
+        "UNION",
+        "MORTGAGE",
+        "LOAN",
+        "LENDING",
+        "SERVICING",
+        "CAPITAL",
+        "FUND",
+        "FUNDS",
+        "FINANCE",
+        "FINANCIAL",
+        "TRUST",
+        "TRUSTEE",
+        "CORP",
+        "CORPORATION",
+        "INC",
+        "LLC",
+        "LP",
+        "LTD",
+        "COMPANY",
+        "CO",
+        "HOLDINGS",
+        "PROPERTIES",
+        "VENTURES",
+        "ASSOCIATION",
+        "NATIONAL",
+        "FEDERAL",
+        "NA",
+        "N.A",
+        "PLC",
+        "GROUP",
+        "PARTNERS",
+        "PARTNERSHIP",
+    }
+    PERSONAL_NAME_SUFFIXES = {"JR", "SR", "II", "III", "IV", "V"}
+    PERSONAL_NAME_STOPWORDS = {
+        "AND",
+        "HUSBAND",
+        "WIFE",
+        "MARRIED",
+        "SINGLE",
+        "MAN",
+        "WOMAN",
+        "JOINT",
+        "TENANTS",
+        "BY",
+        "ENTIRETIES",
+        "AS",
+    }
+    BALLOON_SIGNAL_PHRASES = {
+        "BALLOON",
+        "BALLOON PAYMENT",
+        "ENTIRE ACCOUNT BALANCE",
+        "ENTIRE UNPAID PRINCIPAL BALANCE",
+        "ENTIRE PRINCIPAL BALANCE",
+        "ALL SUMS SECURED BY THIS SECURITY INSTRUMENT",
+        "FINAL PAYMENT",
+    }
 
     def __init__(self, headless: bool = False, timeout_ms: int = 30_000):
         super().__init__(headless=headless, timeout_ms=timeout_ms)
         self._mortgage_lookup_cache = self._load_mortgage_cache()
+        self._owner_search_cache: dict[str, list[dict[str, str]]] = {}
+        self._pa_details_cache: dict[str, dict[str, str]] = {}
 
     @property
     def county_name(self) -> str:
@@ -88,6 +262,10 @@ class SarasotaScraper(BaseScraper):
             return self._fetch_flippers(max_results)
         if lead_type == LeadType.HIGH_INTEREST:
             return self._fetch_high_interest(max_results)
+        if lead_type == LeadType.MATURING_COMMERCIAL_DEBT:
+            return self._fetch_maturing_commercial_debt(max_results)
+        if lead_type == LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON:
+            return self._fetch_sarasota_personal_commercial_balloon_clients(max_results)
         if lead_type == LeadType.PAST_FINANCING:
             return self._fetch_past_financing(max_results)
         return []
@@ -256,16 +434,36 @@ class SarasotaScraper(BaseScraper):
         if table is None:
             return rows_data
 
-        headers = [self.safe_text(th).lower() for th in table.find_all("th")]
+        header_row = None
+        thead = table.find("thead")
+        if thead:
+            header_row = thead.find("tr")
+        headers = (
+            [self.safe_text(th).lower() for th in header_row.find_all("th", recursive=False)]
+            if header_row
+            else []
+        )
         header_index = {header: idx for idx, header in enumerate(headers)}
 
         if "document type" in header_index and "date recorded" in header_index:
             for tr in table.find_all("tr"):
                 cells = tr.find_all("td")
-                if len(cells) < len(header_index):
+                if len(cells) < 7:
                     continue
+                first_cell_text = self.safe_text(cells[0]).lower()
+                if "view image" not in first_cell_text:
+                    continue
+                image_link = ""
+                if cells:
+                    first_anchor = cells[0].find("a")
+                    if first_anchor and first_anchor.get("href"):
+                        image_link = urljoin(self.CLERK_URL, first_anchor.get("href"))
                 rows_data.append(
                     {
+                        "image_url": image_link,
+                        "instrument_number": self.safe_text(
+                            cells[header_index.get("instrument number", 1)]
+                        ),
                         "instrument_type": self.safe_text(
                             cells[header_index["document type"]]
                         ),
@@ -305,6 +503,8 @@ class SarasotaScraper(BaseScraper):
         normalized_id = self.normalize_parcel_id(parcel_id)
         if not normalized_id:
             return {}
+        if normalized_id in self._pa_details_cache:
+            return dict(self._pa_details_cache[normalized_id])
 
         url = self.PA_PARCEL_URL.format(parcel_id=normalized_id)
         try:
@@ -398,7 +598,21 @@ class SarasotaScraper(BaseScraper):
                     if len(cells) >= 8:
                         details["just_value"] = self._clean_currency(cells[4])
                         details["assessed_value"] = self._clean_currency(cells[5])
+                        details["current_exemptions"] = self._clean_currency(cells[6])
                         details["taxable_value"] = self._clean_currency(cells[7])
+                        if len(cells) >= 9:
+                            details["cap_value"] = self._clean_currency(cells[8])
+                        try:
+                            exemptions_amount = float(details.get("current_exemptions", "0") or 0)
+                        except ValueError:
+                            exemptions_amount = 0.0
+                        try:
+                            cap_amount = float(details.get("cap_value", "0") or 0)
+                        except ValueError:
+                            cap_amount = 0.0
+                        details["has_current_exemption"] = str(
+                            exemptions_amount > 0 or cap_amount > 0
+                        )
 
             elif headers[:6] == [
                 "Transfer Date",
@@ -448,6 +662,7 @@ class SarasotaScraper(BaseScraper):
                 self._normalize_address(mailing) != self._normalize_address(situs)
             )
 
+        self._pa_details_cache[normalized_id] = dict(details)
         return details
 
     @staticmethod
@@ -473,6 +688,7 @@ class SarasotaScraper(BaseScraper):
         record.mtg_amt_source = details.get("mtg_amt_source", record.mtg_amt_source)
         record.year_built = details.get("year_built", record.year_built)
         record.property_type = details.get("property_type", record.property_type)
+        record.current_exemptions = details.get("current_exemptions", record.current_exemptions)
         record.absentee_owner = details.get("absentee_owner", record.absentee_owner)
 
         if not record.last_sale_date:
@@ -483,6 +699,354 @@ class SarasotaScraper(BaseScraper):
             notes.append(record.mtg_amt_source)
         record.notes = " | ".join(dict.fromkeys([note for note in notes if note]))
         return record
+
+    def _extract_mortgage_pdf_terms(self, pdf_source: bytes | str | Path) -> dict[str, str]:
+        """
+        Parse a Sarasota mortgage PDF into lead-friendly fields.
+
+        This is the OCR-backed path for image-only clerk PDFs. The live scraper
+        can call it once we have the document download wired to a search result.
+        """
+        info = extract_mortgage_document_info(pdf_source)
+        return {
+            "instrument_number": info.instrument_number,
+            "borrower_name": info.borrower_name,
+            "lender_name": info.lender_name,
+            "credit_limit": info.credit_limit,
+            "interest_rate": info.interest_rate,
+            "maturity_date": info.maturity_date,
+            "doc_stamp_mortgage": info.doc_stamp_mortgage,
+            "intangible_tax": info.intangible_tax,
+            "extraction_method": info.extraction_method,
+            "pdf_text": info.extracted_text,
+        }
+
+    def _download_clerk_pdf(
+        self,
+        *,
+        image_url: str = "",
+        instrument_number: str = "",
+    ) -> bytes:
+        """Download a Sarasota clerk PDF for a result row."""
+        url = image_url.strip()
+        if not url and instrument_number.strip():
+            url = urljoin(
+                self.CLERK_URL,
+                f"/viewTiff.aspx?intrnum={instrument_number.strip()}",
+            )
+        if not url:
+            return b""
+
+        try:
+            response = requests.get(
+                url,
+                timeout=60,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/122.0.0.0 Safari/537.36"
+                    )
+                },
+            )
+            response.raise_for_status()
+            return response.content
+        except Exception as exc:
+            logger.warning("Sarasota clerk PDF download failed for %s: %s", url, repr(exc))
+            return b""
+
+    def _apply_clerk_pdf_terms(
+        self,
+        record: PropertyRecord,
+        row: dict,
+        terms: dict[str, str],
+    ) -> PropertyRecord:
+        """Apply already-extracted Sarasota clerk PDF terms to a record."""
+        image_url = row.get("image_url", "")
+        instrument_number = row.get("instrument_number", "")
+        record.instrument_number = terms.get("instrument_number", "") or instrument_number
+        record.view_image_url = image_url
+        record.owner_name = terms.get("borrower_name", "") or record.owner_name
+        record.lender_name = terms.get("lender_name", "")
+        record.maturity_date = terms.get("maturity_date", "")
+        record.pdf_extraction_method = terms.get("extraction_method", "")
+
+        credit_limit = terms.get("credit_limit", "")
+        if credit_limit:
+            record.mtg_amt_at_purchase = credit_limit
+            record.mtg_amt_source = "Sarasota Clerk OCR: Credit Limit from recorded mortgage PDF"
+        if terms.get("interest_rate"):
+            record.estimated_interest_rate = terms["interest_rate"]
+
+        extra_notes: list[str] = []
+        if record.lender_name:
+            extra_notes.append(f"Lender: {record.lender_name}")
+        if terms.get("interest_rate"):
+            extra_notes.append(f"Interest Rate: {terms['interest_rate']}")
+        if record.maturity_date:
+            extra_notes.append(f"Maturity Date: {record.maturity_date}")
+        if terms.get("doc_stamp_mortgage"):
+            extra_notes.append(f"Doc Stamp: ${terms['doc_stamp_mortgage']}")
+        if terms.get("intangible_tax"):
+            extra_notes.append(f"Intangible Tax: ${terms['intangible_tax']}")
+        if extra_notes:
+            joined = " | ".join(extra_notes)
+            record.notes = " | ".join([part for part in [record.notes, joined] if part])
+
+        if record.lead_source:
+            if "OCR" not in record.lead_source:
+                record.lead_source = f"{record.lead_source} + OCR"
+        else:
+            record.lead_source = "Sarasota Official Records + OCR"
+
+        return record
+
+    def _enrich_record_from_clerk_pdf(self, record: PropertyRecord, row: dict) -> PropertyRecord:
+        """
+        Attach OCR-derived mortgage terms from a Sarasota clerk PDF to a record.
+        """
+        image_url = row.get("image_url", "")
+        instrument_number = row.get("instrument_number", "")
+        if not image_url and not instrument_number:
+            return record
+
+        pdf_bytes = self._download_clerk_pdf(
+            image_url=image_url,
+            instrument_number=instrument_number,
+        )
+        if not pdf_bytes:
+            return record
+
+        terms = self._extract_mortgage_pdf_terms(pdf_bytes)
+        return self._apply_clerk_pdf_terms(record, row, terms)
+
+    @staticmethod
+    def _normalize_owner_match_text(value: str) -> str:
+        cleaned = " ".join((value or "").upper().replace(",", " ").split())
+        return "".join(char if char.isalnum() or char == " " else " " for char in cleaned).strip()
+
+    def _build_owner_search_query(self, owner_name: str) -> str:
+        cleaned = self._clean_owner_name(owner_name)
+        tokens = [
+            token
+            for token in cleaned.split()
+            if token not in self.OWNER_SEARCH_STOPWORDS
+        ]
+        return " ".join(tokens[:6]).strip()
+
+    def _fetch_pa_owner_rows(self, owner_name: str) -> list[dict[str, str]]:
+        """Search Sarasota PA by owner keywords and return CSV rows."""
+        query = self._build_owner_search_query(owner_name)
+        if not query:
+            return []
+        cache_key = self._normalize_owner_match_text(query)
+        if cache_key in self._owner_search_cache:
+            return self._owner_search_cache[cache_key]
+
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/122.0.0.0 Safari/537.36"
+            )
+        }
+        try:
+            response = requests.post(
+                self.PA_RESULT_URL,
+                data={"OwnerKeywords": query},
+                timeout=30,
+                headers=headers,
+            )
+            response.raise_for_status()
+        except Exception as exc:
+            logger.warning("Sarasota PA owner search failed for %s: %s", query, repr(exc))
+            self._owner_search_cache[cache_key] = []
+            return []
+
+        qid = parse_qs(urlparse(response.url).query).get("qid", [""])[0]
+        if not qid:
+            self._owner_search_cache[cache_key] = []
+            return []
+
+        try:
+            export_response = requests.get(
+                self.PA_EXPORT_URL.format(qid=qid),
+                timeout=60,
+                headers=headers,
+            )
+            export_response.raise_for_status()
+        except Exception as exc:
+            logger.warning("Sarasota PA owner CSV export failed for %s: %s", query, repr(exc))
+            self._owner_search_cache[cache_key] = []
+            return []
+
+        csv_text = export_response.text.lstrip("\ufeff")
+        csv_lines = csv_text.splitlines()
+        if csv_lines and csv_lines[0].startswith("NOTE:"):
+            csv_text = "\n".join(csv_lines[1:])
+
+        rows = list(csv.DictReader(io.StringIO(csv_text)))
+        self._owner_search_cache[cache_key] = rows
+        return rows
+
+    @classmethod
+    def _looks_commercial_property_type(cls, value: str) -> bool:
+        upper_value = " ".join((value or "").upper().split())
+        return any(hint in upper_value for hint in cls.COMMERCIAL_PROPERTY_HINTS)
+
+    @classmethod
+    def _looks_residential_property_type(cls, value: str) -> bool:
+        upper_value = " ".join((value or "").upper().split())
+        return any(hint in upper_value for hint in cls.RESIDENTIAL_PROPERTY_HINTS)
+
+    @classmethod
+    def _has_commercial_entity_token(cls, owner_name: str) -> bool:
+        tokens = {
+            token.strip(".,")
+            for token in " ".join((owner_name or "").upper().split()).split()
+        }
+        return any(token in cls.COMMERCIAL_ENTITY_TOKENS for token in tokens)
+
+    def _enrich_record_from_pa_owner_search(self, record: PropertyRecord, owner_name: str) -> PropertyRecord:
+        """Use Sarasota PA owner search when we can safely identify a parcel."""
+        rows = self._fetch_pa_owner_rows(owner_name)
+        if not rows:
+            return record
+
+        target_norm = self._normalize_owner_match_text(owner_name)
+        query_norm = self._normalize_owner_match_text(self._build_owner_search_query(owner_name))
+        matched_rows: list[dict[str, str]] = []
+
+        for row in rows:
+            owner_text = " ".join(
+                [
+                    row.get("Owner 1", "") or "",
+                    row.get("Owner 2", "") or "",
+                    row.get("Owner 3", "") or "",
+                ]
+            )
+            owner_norm = self._normalize_owner_match_text(owner_text)
+            if not owner_norm:
+                continue
+            if target_norm and (target_norm in owner_norm or owner_norm in target_norm):
+                matched_rows.append(row)
+                continue
+            if query_norm and query_norm in owner_norm:
+                matched_rows.append(row)
+
+        if not matched_rows:
+            return record
+
+        commercial_rows = [
+            row
+            for row in matched_rows
+            if self._looks_commercial_property_type(
+                f"{row.get('Description', '')} {row.get('Property Use Code', '')}"
+            )
+        ]
+
+        selected_row: dict[str, str] | None = None
+        if len(commercial_rows) == 1:
+            selected_row = commercial_rows[0]
+        elif len(matched_rows) == 1:
+            selected_row = matched_rows[0]
+
+        if not selected_row:
+            return record
+
+        parcel_id = self.normalize_parcel_id(selected_row.get("Account #", ""))
+        if parcel_id:
+            record.parcel_id = parcel_id
+        if not record.property_address:
+            record.property_address = (selected_row.get("Situs Address", "") or "").strip()
+        if not record.mailing_address:
+            record.mailing_address = (selected_row.get("Mailing Address", "") or "").strip()
+        if not record.property_type:
+            record.property_type = (selected_row.get("Description", "") or "").strip()
+
+        if parcel_id:
+            record = self._enrich_record_from_pa(record)
+        return record
+
+    def _is_likely_commercial_mortgage(
+        self,
+        borrower_name: str,
+        pdf_text: str,
+        property_type: str = "",
+    ) -> tuple[bool, str]:
+        """Return whether a Sarasota mortgage looks commercial enough for this lead path."""
+        upper_text = " ".join((pdf_text or "").upper().split())
+        upper_property_type = " ".join((property_type or "").upper().split())
+
+        if any(phrase in upper_text for phrase in self.CONSUMER_DOC_PHRASES):
+            return False, "consumer-doc-phrase"
+        if upper_property_type and self._looks_residential_property_type(upper_property_type):
+            return False, "residential-property-type"
+        if any(phrase in upper_text for phrase in self.COMMERCIAL_DOC_PHRASES):
+            return True, "commercial-doc-phrase"
+        if upper_property_type and self._looks_commercial_property_type(upper_property_type):
+            return True, "commercial-property-type"
+        if self._has_commercial_entity_token(borrower_name):
+            return True, "entity-borrower"
+        return False, "no-commercial-signal"
+
+    @classmethod
+    def _parse_percent(cls, value: str) -> float:
+        cleaned = " ".join((value or "").split())
+        if not cleaned:
+            return 0.0
+        match = re.search(r"([0-9]{1,2}(?:\.[0-9]+)?)\s*%", cleaned)
+        if not match:
+            return 0.0
+        try:
+            return float(match.group(1))
+        except ValueError:
+            return 0.0
+
+    @classmethod
+    def _is_non_homestead_candidate(cls, details: dict[str, str]) -> bool:
+        if not details:
+            return False
+        return str(details.get("has_current_exemption", "")).strip().lower() not in {
+            "true",
+            "1",
+            "yes",
+        }
+
+    @classmethod
+    def _is_likely_personal_name(cls, value: str) -> bool:
+        normalized = " ".join((value or "").upper().replace(",", " ").split())
+        if not normalized:
+            return False
+        cleaned_tokens = []
+        for raw_token in normalized.replace("&", " ").replace("/", " ").split():
+            token = raw_token.strip("().")
+            if not token:
+                continue
+            if token in cls.PERSONAL_NAME_SUFFIXES:
+                continue
+            if token in cls.PERSONAL_NAME_STOPWORDS:
+                continue
+            if token in {"ET", "AL", "AKA"}:
+                continue
+            if token in cls.INSTITUTIONAL_NAME_TOKENS:
+                return False
+            alpha = "".join(ch for ch in token if ch.isalpha() or ch == "-")
+            if not alpha:
+                continue
+            cleaned_tokens.append(alpha)
+
+        if len(cleaned_tokens) < 2 or len(cleaned_tokens) > 8:
+            return False
+        return any(len(token.replace("-", "")) > 1 for token in cleaned_tokens)
+
+    @classmethod
+    def _has_balloon_signal(cls, pdf_text: str) -> tuple[bool, str]:
+        upper_text = " ".join((pdf_text or "").upper().split())
+        for phrase in cls.BALLOON_SIGNAL_PHRASES:
+            if phrase in upper_text:
+                return True, phrase.lower().replace(" ", "-")
+        return False, "no-balloon-signal"
 
     def _fetch_cashout_refi(self, max_results: int) -> List[PropertyRecord]:
         """
@@ -953,9 +1517,13 @@ class SarasotaScraper(BaseScraper):
                     deed_type=instrument_type,
                     county=self.county_name,
                     lead_type=LeadType.HIGH_INTEREST.value,
+                    instrument_number=row.get("instrument_number", ""),
+                    view_image_url=row.get("image_url", ""),
                     notes="Peak-rate mortgage or no mortgage >20 years",
                 )
                 rec = self._enrich_record_from_pa(rec)
+                if "mortgage" in instrument_type.lower():
+                    rec = self._enrich_record_from_clerk_pdf(rec, row)
                 records.append(rec)
 
             page.context.close()
@@ -963,6 +1531,233 @@ class SarasotaScraper(BaseScraper):
             logger.error("Sarasota high-interest scrape failed: %s", repr(exc))
 
         logger.info("Sarasota high-interest found: %d", len(records))
+        return records
+
+    def _fetch_maturing_commercial_debt(self, max_results: int) -> List[PropertyRecord]:
+        """
+        Search Sarasota mortgages for OCR-confirmed near-term maturities that
+        also show commercial debt signals.
+        """
+        records: List[PropertyRecord] = []
+        seen_instruments: set[str] = set()
+        scan_limit = max(
+            max_results * self.MATURING_SCAN_LIMIT_MULTIPLIER,
+            self.MATURING_SCAN_MINIMUM,
+        )
+        scanned = 0
+        today = datetime.now().date()
+        maturity_cutoff = today + timedelta(days=365)
+
+        try:
+            page = self.new_page()
+
+            for year in self.MATURING_SEARCH_YEARS:
+                if len(records) >= max_results or scanned >= scan_limit:
+                    break
+
+                self._search_official_records(
+                    page,
+                    "MORTGAGE",
+                    f"01/01/{year}",
+                    f"12/31/{year}",
+                )
+                rows = self._parse_results(page)
+
+                for row in rows:
+                    if len(records) >= max_results or scanned >= scan_limit:
+                        break
+
+                    instrument_number = row.get("instrument_number", "").strip()
+                    if not instrument_number or instrument_number in seen_instruments:
+                        continue
+                    seen_instruments.add(instrument_number)
+
+                    pdf_bytes = self._download_clerk_pdf(
+                        image_url=row.get("image_url", ""),
+                        instrument_number=instrument_number,
+                    )
+                    if not pdf_bytes:
+                        continue
+
+                    scanned += 1
+                    terms = self._extract_mortgage_pdf_terms(pdf_bytes)
+                    maturity_dt = parse_record_date(terms.get("maturity_date", ""))
+                    if not maturity_dt:
+                        continue
+                    maturity_date = maturity_dt.date()
+                    if maturity_date < today or maturity_date > maturity_cutoff:
+                        continue
+
+                    borrower_name = terms.get("borrower_name", "").strip() or row.get("grantee", "")
+                    if not borrower_name:
+                        continue
+
+                    record = PropertyRecord(
+                        owner_name=borrower_name,
+                        last_sale_date=row.get("rec_date", ""),
+                        estimated_interest_rate=estimate_interest_rate(row.get("rec_date", "")),
+                        county=self.county_name,
+                        deed_type=row.get("instrument_type", ""),
+                        lead_type=LeadType.MATURING_COMMERCIAL_DEBT.value,
+                        instrument_number=instrument_number,
+                        lead_source="Sarasota Official Records + OCR",
+                        notes="OCR-confirmed near-term maturity from Sarasota recorded mortgage",
+                    )
+                    record = self._apply_clerk_pdf_terms(record, row, terms)
+                    record = self._enrich_record_from_pa_owner_search(record, borrower_name)
+
+                    is_commercial, commercial_reason = self._is_likely_commercial_mortgage(
+                        borrower_name=record.owner_name,
+                        pdf_text=terms.get("pdf_text", ""),
+                        property_type=record.property_type,
+                    )
+                    if not is_commercial:
+                        continue
+
+                    note_bits = [record.notes] if record.notes else []
+                    note_bits.append(f"Commercial signal: {commercial_reason}")
+                    if record.property_type:
+                        note_bits.append(f"Property Type: {record.property_type}")
+                    record.notes = " | ".join(dict.fromkeys([bit for bit in note_bits if bit]))
+                    records.append(record)
+
+            page.context.close()
+        except Exception as exc:
+            logger.error("Sarasota maturing commercial debt scrape failed: %s", repr(exc))
+
+        logger.info(
+            "Sarasota maturing commercial debt found: %d (scanned %d PDFs)",
+            len(records),
+            scanned,
+        )
+        return records
+
+    def _fetch_sarasota_personal_commercial_balloon_clients(
+        self,
+        max_results: int,
+    ) -> List[PropertyRecord]:
+        """
+        Sarasota-only targeted preset:
+        commercial property, no current exemption, personal borrower,
+        8%+ note rate, and balloon-style maturity within 6 months.
+        """
+        records: List[PropertyRecord] = []
+        seen_instruments: set[str] = set()
+        scan_limit = max(
+            max_results * self.MATURING_SCAN_LIMIT_MULTIPLIER,
+            self.MATURING_SCAN_MINIMUM,
+        )
+        scanned = 0
+        today = datetime.now().date()
+        maturity_cutoff = today + timedelta(days=self.TARGETED_BALLOON_WINDOW_DAYS)
+
+        try:
+            page = self.new_page()
+
+            for year in self.MATURING_SEARCH_YEARS:
+                if len(records) >= max_results or scanned >= scan_limit:
+                    break
+
+                self._search_official_records(
+                    page,
+                    "MORTGAGE",
+                    f"01/01/{year}",
+                    f"12/31/{year}",
+                )
+                rows = self._parse_results(page)
+
+                for row in rows:
+                    if len(records) >= max_results or scanned >= scan_limit:
+                        break
+
+                    instrument_number = row.get("instrument_number", "").strip()
+                    if not instrument_number or instrument_number in seen_instruments:
+                        continue
+                    seen_instruments.add(instrument_number)
+
+                    pdf_bytes = self._download_clerk_pdf(
+                        image_url=row.get("image_url", ""),
+                        instrument_number=instrument_number,
+                    )
+                    if not pdf_bytes:
+                        continue
+
+                    scanned += 1
+                    terms = self._extract_mortgage_pdf_terms(pdf_bytes)
+                    maturity_dt = parse_record_date(terms.get("maturity_date", ""))
+                    if not maturity_dt:
+                        continue
+                    maturity_date = maturity_dt.date()
+                    if maturity_date < today or maturity_date > maturity_cutoff:
+                        continue
+
+                    borrower_name = terms.get("borrower_name", "").strip() or row.get("grantee", "")
+                    if not borrower_name or not self._is_likely_personal_name(borrower_name):
+                        continue
+
+                    interest_rate = self._parse_percent(terms.get("interest_rate", ""))
+                    if interest_rate < self.TARGETED_MIN_INTEREST_RATE:
+                        continue
+
+                    has_balloon_signal, balloon_reason = self._has_balloon_signal(
+                        terms.get("pdf_text", "")
+                    )
+                    if not has_balloon_signal:
+                        continue
+
+                    record = PropertyRecord(
+                        owner_name=borrower_name,
+                        last_sale_date=row.get("rec_date", ""),
+                        estimated_interest_rate=terms.get("interest_rate", ""),
+                        county=self.county_name,
+                        deed_type=row.get("instrument_type", ""),
+                        lead_type=LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON.value,
+                        instrument_number=instrument_number,
+                        lead_source="Sarasota Official Records + OCR",
+                        notes=(
+                            "Targeted Sarasota client profile: personal borrower, "
+                            "commercial property, no current exemption, 8%+ note rate, "
+                            "balloon-style maturity within 6 months"
+                        ),
+                    )
+                    record = self._apply_clerk_pdf_terms(record, row, terms)
+                    record = self._enrich_record_from_pa_owner_search(record, borrower_name)
+
+                    if not record.property_type or not self._looks_commercial_property_type(
+                        record.property_type
+                    ):
+                        continue
+
+                    if not record.parcel_id:
+                        continue
+                    details = self._fetch_pa_details(record.parcel_id)
+                    if not self._is_non_homestead_candidate(details):
+                        continue
+                    record.current_exemptions = details.get(
+                        "current_exemptions",
+                        record.current_exemptions,
+                    )
+
+                    note_bits = [record.notes] if record.notes else []
+                    note_bits.append("Commercial signal: commercial-property-type")
+                    note_bits.append(f"Balloon signal: {balloon_reason}")
+                    note_bits.append(f"Current exemptions: ${record.current_exemptions or '0'}")
+                    note_bits.append(f"Interest threshold met: {terms.get('interest_rate', '')}")
+                    record.notes = " | ".join(dict.fromkeys([bit for bit in note_bits if bit]))
+                    records.append(record)
+
+            page.context.close()
+        except Exception as exc:
+            logger.error(
+                "Sarasota targeted personal commercial balloon scrape failed: %s",
+                repr(exc),
+            )
+
+        logger.info(
+            "Sarasota targeted personal commercial balloon leads found: %d (scanned %d PDFs)",
+            len(records),
+            scanned,
+        )
         return records
 
     def _fetch_past_financing(self, max_results: int) -> List[PropertyRecord]:

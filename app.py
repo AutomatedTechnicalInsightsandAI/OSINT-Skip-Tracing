@@ -70,6 +70,16 @@ LEAD_TYPE_HELP = {
         "with **no recorded mortgage in the last 20 years** - strong DSCR / "
         "refinance candidates."
     ),
+    LeadType.MATURING_COMMERCIAL_DEBT: (
+        "Sarasota mortgage records with **OCR-confirmed maturity dates in the next 12 months** "
+        "and **commercial debt signals** such as entity borrowers, commercial loan language, "
+        "or matched commercial parcel data. This is the dedicated balloon/refi path."
+    ),
+    LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON: (
+        "One-click Sarasota client preset: **commercial property only**, **no current exemption**, "
+        "**personal-name borrower**, **balloon/full-balance maturity due within 6 months**, and "
+        "**OCR-detected note rate of 8% or higher**."
+    ),
     LeadType.PAST_FINANCING: (
         "Records showing **Certificate of Title** or **Satisfaction of Mortgage** "
         "- owners who recently cleared a lien and may be open to new financing."
@@ -82,8 +92,11 @@ OUTREACH_PRIORITY_COLUMNS = [
     "Mailing Address",
     "Last Sale Date",
     "Sale Price",
+    "Instrument Number",
     "Mtg Amt At Purchase",
     "Mtg Amt Source",
+    "Lender Name",
+    "Maturity Date",
     "Lead Strategy",
     "Lead Score",
     "Absentee Owner",
@@ -271,6 +284,15 @@ def main():
                 type="primary",
                 width="stretch",
             )
+            generate_sarasota_clients = st.button(
+                "Sarasota Client Button",
+                type="secondary",
+                width="stretch",
+                help=(
+                    "Runs the Sarasota preset for personal-name commercial balloon "
+                    "borrowers with no current exemption and 8%+ rates."
+                ),
+            )
 
         with col_info:
             st.markdown(
@@ -284,12 +306,19 @@ def main():
         if "saved_csv_path" not in st.session_state:
             st.session_state["saved_csv_path"] = ""
 
-        if generate:
-            st.session_state["results_df"] = run_scrapers(config)
+        run_config = config
+        if generate_sarasota_clients:
+            run_config = {
+                **config,
+                "counties": ["Sarasota"],
+                "lead_type": LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON,
+            }
+        if generate or generate_sarasota_clients:
+            st.session_state["results_df"] = run_scrapers(run_config)
             if not st.session_state["results_df"].empty:
                 saved_path = save_results_csv(
                     st.session_state["results_df"],
-                    config["lead_type"],
+                    run_config["lead_type"],
                 )
                 st.session_state["saved_csv_path"] = str(saved_path)
             else:

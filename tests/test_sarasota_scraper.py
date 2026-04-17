@@ -1,0 +1,179 @@
+"""
+Targeted tests for Sarasota result parsing and clerk PDF enrichment hooks.
+"""
+
+from __future__ import annotations
+
+from scrapers.base_scraper import LeadType, PropertyRecord
+from scrapers.sarasota_scraper import SarasotaScraper
+
+
+RESULTS_HTML = """
+<div id="ctl00_cphBody_rgCaseList">
+  <table>
+    <thead>
+      <tr>
+        <th>Image</th>
+        <th>Instrument Number</th>
+        <th>Book-Page</th>
+        <th>Date Recorded</th>
+        <th>Document Type</th>
+        <th>Name</th>
+        <th>Legal Description</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td><a href="/viewTiff.aspx?intrnum=2026047868" target="_blank">View Image</a></td>
+        <td>2026047868</td>
+        <td>0-0</td>
+        <td>04/13/2026</td>
+        <td>MORTGAGE</td>
+        <td>BANK OF AMERICA NA</td>
+        <td>LT 48 WELLINGTON CHASE UN 1</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+"""
+
+
+class _FakePage:
+    def content(self) -> str:
+        return RESULTS_HTML
+
+
+def test_parse_results_keeps_instrument_number_and_image_url():
+    scraper = SarasotaScraper(headless=True)
+    rows = scraper._parse_results(_FakePage())
+
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["instrument_number"] == "2026047868"
+    assert row["image_url"].endswith("/viewTiff.aspx?intrnum=2026047868")
+    assert row["instrument_type"] == "MORTGAGE"
+
+
+def test_parse_results_ignores_nested_pager_headers():
+    scraper = SarasotaScraper(headless=True)
+    rows = scraper._parse_results(_FakePage())
+
+    assert len(rows) == 1
+
+
+def test_enrich_record_from_clerk_pdf_uses_ocr_terms(monkeypatch):
+    scraper = SarasotaScraper(headless=True)
+    monkeypatch.setattr(scraper, "_download_clerk_pdf", lambda **_kwargs: b"%PDF-sample")
+    monkeypatch.setattr(
+        scraper,
+        "_extract_mortgage_pdf_terms",
+        lambda _pdf: {
+            "instrument_number": "2026047868",
+            "lender_name": "Bank of America, N. A",
+            "credit_limit": "250000.00",
+            "interest_rate": "8.75%",
+            "maturity_date": "April 1, 2056",
+            "doc_stamp_mortgage": "875.00",
+            "intangible_tax": "500.00",
+            "extraction_method": "ocr",
+            "pdf_text": "sample",
+        },
+    )
+
+    record = PropertyRecord(
+        owner_name="Borrower",
+        county="Sarasota",
+        lead_type="High Interest / High Equity (DSCR Prospects)",
+        lead_source="Sarasota Official Records",
+    )
+    enriched = scraper._enrich_record_from_clerk_pdf(
+        record,
+        {
+            "image_url": "https://secure.sarasotaclerk.com/viewTiff.aspx?intrnum=2026047868",
+            "instrument_number": "2026047868",
+        },
+    )
+
+    assert enriched.instrument_number == "2026047868"
+    assert enriched.lender_name == "Bank of America, N. A"
+    assert enriched.maturity_date == "April 1, 2056"
+    assert enriched.mtg_amt_at_purchase == "250000.00"
+    assert enriched.estimated_interest_rate == "8.75%"
+    assert enriched.pdf_extraction_method == "ocr"
+    assert "Maturity Date: April 1, 2056" in enriched.notes
+
+
+def test_is_likely_commercial_mortgage_rejects_consumer_heloc():
+    scraper = SarasotaScraper(headless=True)
+
+    is_commercial, reason = scraper._is_likely_commercial_mortgage(
+        borrower_name="LISA K SNYDER",
+        pdf_text="FLORIDA HOME EQUITY LINE OF CREDIT MORTGAGE",
+        property_type="Single Family Residential",
+    )
+
+    assert is_commercial is False
+    assert reason == "consumer-doc-phrase"
+
+
+def test_is_likely_commercial_mortgage_accepts_entity_borrower():
+    scraper = SarasotaScraper(headless=True)
+
+    is_commercial, reason = scraper._is_likely_commercial_mortgage(
+        borrower_name="SUNCOAST OFFICE PARK LLC",
+        pdf_text="Mortgage and security instrument.",
+        property_type="",
+    )
+
+    assert is_commercial is True
+    assert reason == "entity-borrower"
+
+
+def test_fetch_records_routes_maturing_commercial_debt(monkeypatch):
+    scraper = SarasotaScraper(headless=True)
+    monkeypatch.setattr(
+        scraper,
+        "_fetch_maturing_commercial_debt",
+        lambda max_results: [
+            PropertyRecord(
+                owner_name="SUNCOAST OFFICE PARK LLC",
+                county="Sarasota",
+                lead_type=LeadType.MATURING_COMMERCIAL_DEBT.value,
+            )
+        ],
+    )
+
+    records = scraper.fetch_records(LeadType.MATURING_COMMERCIAL_DEBT, max_results=5)
+
+    assert len(records) == 1
+    assert records[0].lead_type == LeadType.MATURING_COMMERCIAL_DEBT.value
+
+
+def test_is_likely_personal_name_rejects_bank():
+    scraper = SarasotaScraper(headless=True)
+
+    assert scraper._is_likely_personal_name("BANK OF AMERICA NA") is False
+    assert scraper._is_likely_personal_name("LISA K SNYDER") is True
+
+
+def test_fetch_records_routes_targeted_sarasota_clients(monkeypatch):
+    scraper = SarasotaScraper(headless=True)
+    monkeypatch.setattr(
+        scraper,
+        "_fetch_sarasota_personal_commercial_balloon_clients",
+        lambda max_results: [
+            PropertyRecord(
+                owner_name="LISA K SNYDER",
+                county="Sarasota",
+                lead_type=LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON.value,
+            )
+        ],
+    )
+
+    records = scraper.fetch_records(
+        LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON,
+        max_results=5,
+    )
+
+    assert len(records) == 1
+    assert records[0].lead_type == LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON.value
