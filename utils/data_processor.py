@@ -204,7 +204,7 @@ class DataProcessor:
         )
 
         confirmed_zero_mortgage = mtg.notna() & mtg.eq(0)
-        fix_flip_flag = (
+        transfer_velocity_flag = (
             ((vi == "V") & sale_price.notna() & just.notna() & (sale_price < (just * 0.8)))
             | (year_built.notna() & (year_built < 1980) & just.notna() & assessed.notna() & (just > assessed * 1.2))
         )
@@ -220,7 +220,7 @@ class DataProcessor:
             and today <= value <= today + pd.Timedelta(days=365)
         )
 
-        df["Transfer Velocity Candidate"] = fix_flip_flag
+        df["Transfer Velocity Candidate"] = transfer_velocity_flag
         df["DSCR Prospect"] = dscr_flag
         df["Equity Rich Candidate"] = equity_rich_flag
         df["Recent Sale Candidate"] = recent_sale
@@ -244,12 +244,15 @@ class DataProcessor:
             return row.get("Lead Type", "")
         if bool(row.get("Maturing Loan Candidate", False)):
             return LeadType.BALLOON_PROSPECTS.value
-        if bool(row.get("DSCR Prospect", False)):
-            return "Rate/Eq Refi Candidate"
-        if bool(row.get("Equity Rich Candidate", False)):
-            return "Equity-Rich Opportunity"
-        if bool(row.get("Transfer Velocity Candidate", False)):
-            return "Transfer Velocity Opportunity"
+        if any(
+            bool(row.get(flag, False))
+            for flag in (
+                "DSCR Prospect",
+                "Equity Rich Candidate",
+                "Transfer Velocity Candidate",
+            )
+        ):
+            return LeadType.BALLOON_PROSPECTS.value
         return row.get("Lead Type", "")
 
     @staticmethod

@@ -19,7 +19,7 @@ import logging
 import re
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import List
+from typing import List, Set
 from urllib.parse import urljoin, urlparse, parse_qs
 import requests
 
@@ -1755,20 +1755,23 @@ class SarasotaScraper(BaseScraper):
 
     def _fetch_balloon_prospects(self, max_results: int) -> List[PropertyRecord]:
         """Return the union of both Sarasota balloon prospect workflows."""
-        merged: list[PropertyRecord] = []
-        seen: set[str] = set()
+        merged: List[PropertyRecord] = []
+        seen: Set[tuple[str, ...]] = set()
 
         for record in (
             self._fetch_maturing_commercial_debt(max_results)
             + self._fetch_sarasota_personal_commercial_balloon_clients(max_results)
         ):
             instrument = (record.instrument_number or "").strip()
-            key = instrument or "|".join(
-                [
+            key: tuple[str, ...] = (
+                ("instrument", instrument)
+                if instrument
+                else (
+                    "fallback",
                     (record.owner_name or "").strip().upper(),
                     (record.property_address or "").strip().upper(),
                     (record.last_sale_date or "").strip(),
-                ]
+                )
             )
             if key in seen:
                 continue
