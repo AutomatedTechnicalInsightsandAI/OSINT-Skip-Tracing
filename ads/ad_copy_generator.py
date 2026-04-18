@@ -283,7 +283,7 @@ _GOOGLE_RSA_COPY: dict[str, dict] = {
     "hard_money": {
         "headlines": [
             "Hard Money – Fast Close",
-            "Fix & Flip Funding Fast",
+            "Rehab Funding Fast",
             "Hard Money 24hr Approval",
             "Rehab Loans FL Expert",
             "Close in 7 Days",
@@ -309,7 +309,7 @@ _GOOGLE_RSA_COPY: dict[str, dict] = {
     },
     "fix_and_flip": {
         "headlines": [
-            "Fix & Flip Loans – FL",
+            "Rehab Loans – FL",
             "Rehab Loan Fast Close",
             "Flip Funding 24hr OK",
             "Up to 90% of Cost",
@@ -608,7 +608,7 @@ _META_AD_COPY: dict[str, dict] = {
             "We fund up to 90% of purchase + 100% of rehab costs with fast draw schedules. "
             "✅ Up to 90% of purchase price\n✅ 100% rehab funded\n✅ Close in 10 days"
         ),
-        "headline": "Fix & Flip Loans – FL",
+        "headline": "Rehab Loans – FL",
         "description": "90% LTV. 100% Rehab. Close in 10 Days.",
         "call_to_action": "Get Funded",
     },
@@ -784,7 +784,7 @@ _META_AD_COPY_VARIANT_B: dict[str, dict] = {
             "90% of purchase + 100% of rehab. Draw schedules that actually work. "
             "✅ 90% purchase + 100% rehab\n✅ Flexible draw schedule\n✅ No W2s required"
         ),
-        "headline": "Fix & Flip – 90%+100% Funding",
+        "headline": "Rehab Loans – 90%+100% Funding",
         "description": "Full Rehab Funded. Flexible Draws.",
         "call_to_action": "Get Funded",
     },

@@ -29,7 +29,7 @@ def _make_records(n: int = 3) -> list[PropertyRecord]:
             estimated_interest_rate="~6.81%",
             scraped_emails="",
             county="Sarasota",
-            lead_type=LeadType.FLIPPER.value,
+            lead_type=LeadType.BALLOON_PROSPECTS.value,
             sale_price="250000",
             just_value="500000",
             assessed_value="350000",
@@ -136,7 +136,7 @@ def test_process_flags_maturing_loan_candidates(processor_no_skip):
         mailing_address="PO Box 99, Tampa, FL",
         last_sale_date="06/15/2023",
         county="Sarasota",
-        lead_type=LeadType.HIGH_INTEREST.value,
+        lead_type=LeadType.BALLOON_PROSPECTS.value,
         sale_price="650000",
         just_value="800000",
         assessed_value="700000",
@@ -148,11 +148,11 @@ def test_process_flags_maturing_loan_candidates(processor_no_skip):
     df = processor_no_skip.process([record])
     row = df.iloc[0]
     assert bool(row["Maturing Loan Candidate"]) is True
-    assert row["Lead Strategy"] == "Maturing Debt Refi (Balloon Candidate)"
+    assert row["Lead Strategy"] == LeadType.BALLOON_PROSPECTS.value
     assert float(row["Months To Maturity"]) > 0
 
 
-def test_process_preserves_dedicated_maturing_commercial_debt_lead_type(processor_no_skip):
+def test_process_preserves_balloon_prospects_lead_type(processor_no_skip):
     upcoming = (datetime.now() + timedelta(days=180)).strftime("%B %d, %Y")
     record = PropertyRecord(
         owner_name="SUNCOAST OFFICE PARK LLC",
@@ -160,7 +160,7 @@ def test_process_preserves_dedicated_maturing_commercial_debt_lead_type(processo
         mailing_address="200 Finance Way, Tampa, FL",
         last_sale_date="06/15/2021",
         county="Sarasota",
-        lead_type=LeadType.MATURING_COMMERCIAL_DEBT.value,
+        lead_type=LeadType.BALLOON_PROSPECTS.value,
         sale_price="1500000",
         just_value="1800000",
         assessed_value="1600000",
@@ -172,35 +172,8 @@ def test_process_preserves_dedicated_maturing_commercial_debt_lead_type(processo
     df = processor_no_skip.process([record])
     row = df.iloc[0]
     assert bool(row["Maturing Loan Candidate"]) is True
-    assert row["Lead Strategy"] == LeadType.MATURING_COMMERCIAL_DEBT.value
+    assert row["Lead Strategy"] == LeadType.BALLOON_PROSPECTS.value
     assert int(row["Lead Score"]) >= 35
-
-
-def test_process_preserves_targeted_sarasota_client_lead_type(processor_no_skip):
-    upcoming = (datetime.now() + timedelta(days=120)).strftime("%B %d, %Y")
-    record = PropertyRecord(
-        owner_name="LISA K SNYDER",
-        property_address="100 Commerce Blvd, Sarasota, FL",
-        mailing_address="200 Finance Way, Tampa, FL",
-        last_sale_date="06/15/2021",
-        estimated_interest_rate="8.75%",
-        county="Sarasota",
-        lead_type=LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON.value,
-        sale_price="950000",
-        just_value="1200000",
-        assessed_value="1100000",
-        taxable_value="1100000",
-        mtg_amt_at_purchase="700000",
-        lender_name="Regional Bank",
-        maturity_date=upcoming,
-        property_type="Commercial Office",
-        current_exemptions="0",
-    )
-    df = processor_no_skip.process([record])
-    row = df.iloc[0]
-    assert bool(row["Maturing Loan Candidate"]) is True
-    assert row["Lead Strategy"] == LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON.value
-    assert row["Current Exemptions"] == "0"
 
 
 # ---------------------------------------------------------------------------

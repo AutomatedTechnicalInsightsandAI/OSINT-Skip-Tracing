@@ -28,12 +28,9 @@ logger = logging.getLogger(__name__)
 class LeadType(str, Enum):
     """Supported lead categories for Prime Coastal Funding."""
 
-    CASHOUT_REFI = "Recent Purchase Cash-Out Refi Prospects"
-    FLIPPER = "Fix & Flip Investors"
-    HIGH_INTEREST = "High Interest / High Equity (DSCR Prospects)"
-    MATURING_COMMERCIAL_DEBT = "Maturing Commercial Debt (Balloon Prospects)"
-    SARASOTA_PERSONAL_COMMERCIAL_BALLOON = "Sarasota Personal Commercial Balloon Clients"
-    PAST_FINANCING = "Past Financing (Satisfied Mortgage / Certificate of Title)"
+    # ⚠️ DO NOT CHANGE
+    CASHOUT_REFI = "Recent Purchase Cash-Out Refi Prospects"  # ⚠️ DO NOT CHANGE
+    BALLOON_PROSPECTS = "Commercial Balloon Prospects"
 
 
 @dataclass

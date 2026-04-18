@@ -56,33 +56,17 @@ COUNTY_SCRAPERS = {
 }
 
 LEAD_TYPE_HELP = {
-    LeadType.CASHOUT_REFI: (
+    LeadType.CASHOUT_REFI: (  # ⚠️ DO NOT CHANGE
         "Sarasota purchases with **Last Sale Date from 07/01/2023 through 09/30/2024**, "
         "**sale price > $250k**, and **no matching mortgage recorded at purchase**. "
         "These are strong cash-out refinance targets."
     ),
-    LeadType.FLIPPER: (
-        "Properties with **2+ deed transfers within 12 months** - "
-        "likely fix-and-flip investors who may need short-term bridge financing."
-    ),
-    LeadType.HIGH_INTEREST: (
-        "Mortgage deeds recorded in **2022-2023** (peak rate era) or properties "
-        "with **no recorded mortgage in the last 20 years** - strong DSCR / "
-        "refinance candidates."
-    ),
-    LeadType.MATURING_COMMERCIAL_DEBT: (
-        "Sarasota mortgage records with **OCR-confirmed maturity dates in the next 12 months** "
-        "and **commercial debt signals** such as entity borrowers, commercial loan language, "
-        "or matched commercial parcel data. This is the dedicated balloon/refi path."
-    ),
-    LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON: (
-        "One-click Sarasota client preset: **commercial property only**, **no current exemption**, "
-        "**personal-name borrower**, **balloon/full-balance maturity due within 6 months**, and "
-        "**OCR-detected note rate of 8% or higher**."
-    ),
-    LeadType.PAST_FINANCING: (
-        "Records showing **Certificate of Title** or **Satisfaction of Mortgage** "
-        "- owners who recently cleared a lien and may be open to new financing."
+    LeadType.BALLOON_PROSPECTS: (
+        "Merged balloon/refi target: includes (1) Sarasota mortgage records with OCR-confirmed "
+        "maturity dates in the next 12 months and commercial debt signals (entity borrowers, "
+        "commercial loan language, or matched commercial parcel data); AND (2) commercial "
+        "property with personal-name borrowers, no current exemption, balloon maturity due within "
+        "6 months, and OCR-detected note rate of 8% or higher."
     ),
 }
 
@@ -284,15 +268,6 @@ def main():
                 type="primary",
                 width="stretch",
             )
-            generate_sarasota_clients = st.button(
-                "Sarasota Client Button",
-                type="secondary",
-                width="stretch",
-                help=(
-                    "Runs the Sarasota preset for personal-name commercial balloon "
-                    "borrowers with no current exemption and 8%+ rates."
-                ),
-            )
 
         with col_info:
             st.markdown(
@@ -306,19 +281,12 @@ def main():
         if "saved_csv_path" not in st.session_state:
             st.session_state["saved_csv_path"] = ""
 
-        run_config = config
-        if generate_sarasota_clients:
-            run_config = {
-                **config,
-                "counties": ["Sarasota"],
-                "lead_type": LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON,
-            }
-        if generate or generate_sarasota_clients:
-            st.session_state["results_df"] = run_scrapers(run_config)
+        if generate:
+            st.session_state["results_df"] = run_scrapers(config)
             if not st.session_state["results_df"].empty:
                 saved_path = save_results_csv(
                     st.session_state["results_df"],
-                    run_config["lead_type"],
+                    config["lead_type"],
                 )
                 st.session_state["saved_csv_path"] = str(saved_path)
             else:

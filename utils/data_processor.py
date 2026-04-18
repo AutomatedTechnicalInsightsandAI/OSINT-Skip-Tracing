@@ -204,7 +204,7 @@ class DataProcessor:
         )
 
         confirmed_zero_mortgage = mtg.notna() & mtg.eq(0)
-        fix_flip_flag = (
+        transfer_velocity_flag = (
             ((vi == "V") & sale_price.notna() & just.notna() & (sale_price < (just * 0.8)))
             | (year_built.notna() & (year_built < 1980) & just.notna() & assessed.notna() & (just > assessed * 1.2))
         )
@@ -220,7 +220,7 @@ class DataProcessor:
             and today <= value <= today + pd.Timedelta(days=365)
         )
 
-        df["Fix & Flip Candidate"] = fix_flip_flag
+        df["Transfer Velocity Candidate"] = transfer_velocity_flag
         df["DSCR Prospect"] = dscr_flag
         df["Equity Rich Candidate"] = equity_rich_flag
         df["Recent Sale Candidate"] = recent_sale
@@ -240,19 +240,19 @@ class DataProcessor:
     def _pick_lead_strategy(row: pd.Series) -> str:
         if bool(row.get("Cash-Out Refi Candidate", False)):
             return LeadType.CASHOUT_REFI.value
-        if row.get("Lead Type", "") in {
-            LeadType.MATURING_COMMERCIAL_DEBT.value,
-            LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON.value,
-        }:
+        if row.get("Lead Type", "") == LeadType.BALLOON_PROSPECTS.value:
             return row.get("Lead Type", "")
         if bool(row.get("Maturing Loan Candidate", False)):
-            return "Maturing Debt Refi (Balloon Candidate)"
-        if bool(row.get("DSCR Prospect", False)):
-            return LeadType.HIGH_INTEREST.value
-        if bool(row.get("Equity Rich Candidate", False)):
-            return "Past Financing (Equity Rich)"
-        if bool(row.get("Fix & Flip Candidate", False)):
-            return LeadType.FLIPPER.value
+            return LeadType.BALLOON_PROSPECTS.value
+        if any(
+            bool(row.get(flag, False))
+            for flag in (
+                "DSCR Prospect",
+                "Equity Rich Candidate",
+                "Transfer Velocity Candidate",
+            )
+        ):
+            return LeadType.BALLOON_PROSPECTS.value
         return row.get("Lead Type", "")
 
     @staticmethod
@@ -260,10 +260,7 @@ class DataProcessor:
         score = 25
         if bool(row.get("Absentee Owner", False)):
             score += 15
-        if row.get("Lead Type", "") in {
-            LeadType.MATURING_COMMERCIAL_DEBT.value,
-            LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON.value,
-        }:
+        if row.get("Lead Type", "") == LeadType.BALLOON_PROSPECTS.value:
             score += 10
         if bool(row.get("Peak Rate Purchase Candidate", False)):
             score += 10
@@ -271,7 +268,7 @@ class DataProcessor:
             score += 30
         if bool(row.get("Maturing Loan Candidate", False)):
             score += 25
-        if bool(row.get("Fix & Flip Candidate", False)):
+        if bool(row.get("Transfer Velocity Candidate", False)):
             score += 20
         if bool(row.get("DSCR Prospect", False)):
             score += 25
@@ -380,7 +377,7 @@ class DataProcessor:
             "Peak Rate Purchase Candidate",
             "Cash-Out Refi Candidate",
             "Maturing Loan Candidate",
-            "Fix & Flip Candidate",
+            "Transfer Velocity Candidate",
             "DSCR Prospect",
             "Equity Rich Candidate",
             "PDF Extraction Method",

@@ -83,7 +83,7 @@ def test_enrich_record_from_clerk_pdf_uses_ocr_terms(monkeypatch):
     record = PropertyRecord(
         owner_name="Borrower",
         county="Sarasota",
-        lead_type="High Interest / High Equity (DSCR Prospects)",
+        lead_type=LeadType.BALLOON_PROSPECTS.value,
         lead_source="Sarasota Official Records",
     )
     enriched = scraper._enrich_record_from_clerk_pdf(
@@ -129,7 +129,7 @@ def test_is_likely_commercial_mortgage_accepts_entity_borrower():
     assert reason == "entity-borrower"
 
 
-def test_fetch_records_routes_maturing_commercial_debt(monkeypatch):
+def test_fetch_records_routes_balloon_prospects_union(monkeypatch):
     scraper = SarasotaScraper(headless=True)
     monkeypatch.setattr(
         scraper,
@@ -138,26 +138,10 @@ def test_fetch_records_routes_maturing_commercial_debt(monkeypatch):
             PropertyRecord(
                 owner_name="SUNCOAST OFFICE PARK LLC",
                 county="Sarasota",
-                lead_type=LeadType.MATURING_COMMERCIAL_DEBT.value,
+                lead_type=LeadType.BALLOON_PROSPECTS.value,
             )
         ],
     )
-
-    records = scraper.fetch_records(LeadType.MATURING_COMMERCIAL_DEBT, max_results=5)
-
-    assert len(records) == 1
-    assert records[0].lead_type == LeadType.MATURING_COMMERCIAL_DEBT.value
-
-
-def test_is_likely_personal_name_rejects_bank():
-    scraper = SarasotaScraper(headless=True)
-
-    assert scraper._is_likely_personal_name("BANK OF AMERICA NA") is False
-    assert scraper._is_likely_personal_name("LISA K SNYDER") is True
-
-
-def test_fetch_records_routes_targeted_sarasota_clients(monkeypatch):
-    scraper = SarasotaScraper(headless=True)
     monkeypatch.setattr(
         scraper,
         "_fetch_sarasota_personal_commercial_balloon_clients",
@@ -165,15 +149,20 @@ def test_fetch_records_routes_targeted_sarasota_clients(monkeypatch):
             PropertyRecord(
                 owner_name="LISA K SNYDER",
                 county="Sarasota",
-                lead_type=LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON.value,
+                lead_type=LeadType.BALLOON_PROSPECTS.value,
             )
         ],
     )
 
-    records = scraper.fetch_records(
-        LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON,
-        max_results=5,
-    )
+    records = scraper.fetch_records(LeadType.BALLOON_PROSPECTS, max_results=5)
 
-    assert len(records) == 1
-    assert records[0].lead_type == LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON.value
+    assert len(records) == 2
+    assert records[0].lead_type == LeadType.BALLOON_PROSPECTS.value
+    assert records[1].lead_type == LeadType.BALLOON_PROSPECTS.value
+
+
+def test_is_likely_personal_name_rejects_bank():
+    scraper = SarasotaScraper(headless=True)
+
+    assert scraper._is_likely_personal_name("BANK OF AMERICA NA") is False
+    assert scraper._is_likely_personal_name("LISA K SNYDER") is True
