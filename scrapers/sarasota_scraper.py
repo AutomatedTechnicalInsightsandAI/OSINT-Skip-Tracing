@@ -1424,6 +1424,19 @@ class SarasotaScraper(BaseScraper):
         text = repr(exc)
         return "TargetClosedError" in text or "Target page, context or browser has been closed" in text
 
+    def _get_fresh_page(self, stale_page=None):
+        """Open a new page context, closing any stale one first."""
+        if stale_page is not None:
+            try:
+                stale_page.context.close()
+            except Exception:
+                pass
+        try:
+            return self.new_page()
+        except Exception:
+            self.start_browser()
+            return self.new_page()
+
     # ------------------------------------------------------------------
     # Lead-type specific scrapers
     # ------------------------------------------------------------------
@@ -1559,13 +1572,38 @@ class SarasotaScraper(BaseScraper):
                 if len(records) >= max_results or scanned >= scan_limit:
                     break
 
-                self._search_official_records(
-                    page,
-                    "MORTGAGE",
-                    f"01/01/{year}",
-                    f"12/31/{year}",
-                )
-                rows = self._parse_results(page)
+                try:
+                    self._search_official_records(
+                        page,
+                        "MORTGAGE",
+                        f"01/01/{year}",
+                        f"12/31/{year}",
+                    )
+                    rows = self._parse_results(page)
+                except Exception as exc:
+                    if self._is_target_closed_error(exc):
+                        logger.warning(
+                            "Sarasota balloon: page closed mid-search for year %d, reopening",
+                            year,
+                        )
+                        page = self._get_fresh_page(page)
+                        try:
+                            self._search_official_records(
+                                page,
+                                "MORTGAGE",
+                                f"01/01/{year}",
+                                f"12/31/{year}",
+                            )
+                            rows = self._parse_results(page)
+                        except Exception as retry_exc:
+                            logger.warning(
+                                "Sarasota balloon: retry failed for year %d: %s",
+                                year,
+                                repr(retry_exc),
+                            )
+                            continue
+                    else:
+                        raise
 
                 for row in rows:
                     if len(records) >= max_results or scanned >= scan_limit:
@@ -1662,13 +1700,38 @@ class SarasotaScraper(BaseScraper):
                 if len(records) >= max_results or scanned >= scan_limit:
                     break
 
-                self._search_official_records(
-                    page,
-                    "MORTGAGE",
-                    f"01/01/{year}",
-                    f"12/31/{year}",
-                )
-                rows = self._parse_results(page)
+                try:
+                    self._search_official_records(
+                        page,
+                        "MORTGAGE",
+                        f"01/01/{year}",
+                        f"12/31/{year}",
+                    )
+                    rows = self._parse_results(page)
+                except Exception as exc:
+                    if self._is_target_closed_error(exc):
+                        logger.warning(
+                            "Sarasota balloon: page closed mid-search for year %d, reopening",
+                            year,
+                        )
+                        page = self._get_fresh_page(page)
+                        try:
+                            self._search_official_records(
+                                page,
+                                "MORTGAGE",
+                                f"01/01/{year}",
+                                f"12/31/{year}",
+                            )
+                            rows = self._parse_results(page)
+                        except Exception as retry_exc:
+                            logger.warning(
+                                "Sarasota balloon: retry failed for year %d: %s",
+                                year,
+                                repr(retry_exc),
+                            )
+                            continue
+                    else:
+                        raise
 
                 for row in rows:
                     if len(records) >= max_results or scanned >= scan_limit:
