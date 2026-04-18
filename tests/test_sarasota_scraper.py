@@ -62,7 +62,7 @@ class _SearchPage:
     def click(self, selector: str):
         self.click_calls.append(selector)
 
-    def wait_for_load_state(self, state: str, timeout: int):
+    def wait_for_load_state(self, state: str, timeout: int | None = None):
         self.load_wait_calls.append((state, timeout))
         if self.load_raises:
             raise RuntimeError("load timeout")
