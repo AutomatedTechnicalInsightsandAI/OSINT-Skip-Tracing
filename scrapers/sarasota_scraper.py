@@ -283,7 +283,7 @@ class SarasotaScraper(BaseScraper):
         Bug 3 fix: actually fill in and submit the search form instead of just
         reading the landing page HTML.
         """
-        page.goto(self.CLERK_URL, wait_until="domcontentloaded")
+        page.goto(self.CLERK_URL, wait_until="domcontentloaded", timeout=30_000)
         self.sleep()
         self.random_scroll(page)
 
@@ -302,7 +302,18 @@ class SarasotaScraper(BaseScraper):
 
         try:
             page.click("#ctl00_cphBody_bSearch_input")
-            page.wait_for_load_state("networkidle")
+            try:
+                page.wait_for_load_state("load", timeout=15_000)
+            except Exception:
+                pass
+            try:
+                page.wait_for_selector(
+                    "#ctl00_cphBody_rgCaseList table, table",
+                    timeout=10_000,
+                    state="visible",
+                )
+            except Exception:
+                pass
             self.sleep()
         except Exception as exc:
             logger.warning("Sarasota: form submit failed: %s", repr(exc))

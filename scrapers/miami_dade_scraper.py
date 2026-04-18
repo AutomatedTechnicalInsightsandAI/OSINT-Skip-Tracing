@@ -89,7 +89,10 @@ class MiamiDadeScraper(BaseScraper):
             page.fill('input[name="StartDate"]', f"01/01/{start_year}")
             page.fill('input[name="EndDate"]', f"12/31/{start_year + 1}")
             page.click('input[type="submit"]')
-            page.wait_for_load_state("networkidle")
+            try:
+                page.wait_for_load_state("load", timeout=15_000)
+            except Exception:
+                pass
             self.sleep()
         except Exception as exc:
             logger.warning("Miami-Dade form interaction failed: %s", exc)
