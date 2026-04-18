@@ -20,12 +20,10 @@ The project is currently tuned for Prime Coastal Funding workflows, with the str
   - purchases in the last 6 months
   - sale price over $250,000
   - no matching Sarasota mortgage found near the purchase date
-- `Fix & Flip Investors`
-  Properties with 2 or more deed transfers within 12 months
-- `High Interest / High Equity (DSCR Prospects)`
-  Mortgage deeds from 2022-2023 or older no-mortgage-style scenarios
-- `Past Financing (Satisfied Mortgage / Certificate of Title)`
-  Records tied to prior financing events
+- `Commercial Balloon Prospects`
+  Merged balloon workflow that unions:
+  - OCR-confirmed mortgage maturities due within 12 months with commercial debt signals
+  - Sarasota commercial property with personal-name borrower, no current exemption, balloon maturity due within 6 months, and OCR note rate >= 8%
 
 ## Sarasota Cash-Out Refi Workflow
 

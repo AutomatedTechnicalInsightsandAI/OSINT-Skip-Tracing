@@ -47,7 +47,7 @@ _SUB_VERTICAL_LABELS: dict[str, str] = {
     "pest_control": "Pest Control",
     "dscr_loan": "DSCR Loan",
     "hard_money": "Hard Money",
-    "fix_and_flip": "Fix & Flip",
+    "fix_and_flip": "Rehab Loans",
     "bridge_loan": "Bridge Loan",
     "commercial_re": "Commercial RE",
     "wholesale_buyer": "Wholesale Buyer",

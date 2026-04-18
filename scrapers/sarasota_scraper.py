@@ -256,18 +256,11 @@ class SarasotaScraper(BaseScraper):
             "Sarasota: fetching '%s' leads (max %d)", lead_type.value, max_results
         )
 
+        # ⚠️ DO NOT CHANGE
         if lead_type == LeadType.CASHOUT_REFI:
             return self._fetch_cashout_refi(max_results)
-        if lead_type == LeadType.FLIPPER:
-            return self._fetch_flippers(max_results)
-        if lead_type == LeadType.HIGH_INTEREST:
-            return self._fetch_high_interest(max_results)
-        if lead_type == LeadType.MATURING_COMMERCIAL_DEBT:
-            return self._fetch_maturing_commercial_debt(max_results)
-        if lead_type == LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON:
-            return self._fetch_sarasota_personal_commercial_balloon_clients(max_results)
-        if lead_type == LeadType.PAST_FINANCING:
-            return self._fetch_past_financing(max_results)
+        if lead_type == LeadType.BALLOON_PROSPECTS:
+            return self._fetch_balloon_prospects(max_results)
         return []
 
     # ------------------------------------------------------------------
@@ -1476,7 +1469,7 @@ class SarasotaScraper(BaseScraper):
                         ),
                         deed_type=last.get("deed_type", ""),
                         county=self.county_name,
-                        lead_type=LeadType.FLIPPER.value,
+                        lead_type=LeadType.BALLOON_PROSPECTS.value,
                         notes="2+ transfers within 12 months",
                     )
                     rec = self._enrich_record_from_pa(rec)
@@ -1516,7 +1509,7 @@ class SarasotaScraper(BaseScraper):
                     estimated_interest_rate=estimate_interest_rate(rec_date),
                     deed_type=instrument_type,
                     county=self.county_name,
-                    lead_type=LeadType.HIGH_INTEREST.value,
+                    lead_type=LeadType.BALLOON_PROSPECTS.value,
                     instrument_number=row.get("instrument_number", ""),
                     view_image_url=row.get("image_url", ""),
                     notes="Peak-rate mortgage or no mortgage >20 years",
@@ -1598,7 +1591,7 @@ class SarasotaScraper(BaseScraper):
                         estimated_interest_rate=estimate_interest_rate(row.get("rec_date", "")),
                         county=self.county_name,
                         deed_type=row.get("instrument_type", ""),
-                        lead_type=LeadType.MATURING_COMMERCIAL_DEBT.value,
+                        lead_type=LeadType.BALLOON_PROSPECTS.value,
                         instrument_number=instrument_number,
                         lead_source="Sarasota Official Records + OCR",
                         notes="OCR-confirmed near-term maturity from Sarasota recorded mortgage",
@@ -1711,7 +1704,7 @@ class SarasotaScraper(BaseScraper):
                         estimated_interest_rate=terms.get("interest_rate", ""),
                         county=self.county_name,
                         deed_type=row.get("instrument_type", ""),
-                        lead_type=LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON.value,
+                        lead_type=LeadType.BALLOON_PROSPECTS.value,
                         instrument_number=instrument_number,
                         lead_source="Sarasota Official Records + OCR",
                         notes=(
@@ -1760,6 +1753,32 @@ class SarasotaScraper(BaseScraper):
         )
         return records
 
+    def _fetch_balloon_prospects(self, max_results: int) -> List[PropertyRecord]:
+        """Return the union of both Sarasota balloon prospect workflows."""
+        merged: list[PropertyRecord] = []
+        seen: set[str] = set()
+
+        for record in (
+            self._fetch_maturing_commercial_debt(max_results)
+            + self._fetch_sarasota_personal_commercial_balloon_clients(max_results)
+        ):
+            instrument = (record.instrument_number or "").strip()
+            key = instrument or "|".join(
+                [
+                    (record.owner_name or "").strip().upper(),
+                    (record.property_address or "").strip().upper(),
+                    (record.last_sale_date or "").strip(),
+                ]
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            record.lead_type = LeadType.BALLOON_PROSPECTS.value
+            merged.append(record)
+            if len(merged) >= max_results:
+                break
+        return merged
+
     def _fetch_past_financing(self, max_results: int) -> List[PropertyRecord]:
         """
         Search for Certificate of Title or Satisfaction of Mortgage instruments.
@@ -1789,7 +1808,7 @@ class SarasotaScraper(BaseScraper):
                         estimated_interest_rate=estimate_interest_rate(rec_date),
                         deed_type=instrument_type,
                         county=self.county_name,
-                        lead_type=LeadType.PAST_FINANCING.value,
+                        lead_type=LeadType.BALLOON_PROSPECTS.value,
                     )
                     rec = self._enrich_record_from_pa(rec)
                     records.append(rec)

@@ -25,11 +25,7 @@ from scrapers.base_scraper import (
 
 def test_lead_type_values():
     assert LeadType.CASHOUT_REFI.value == "Recent Purchase Cash-Out Refi Prospects"
-    assert LeadType.FLIPPER.value == "Fix & Flip Investors"
-    assert LeadType.HIGH_INTEREST.value == "High Interest / High Equity (DSCR Prospects)"
-    assert LeadType.MATURING_COMMERCIAL_DEBT.value == "Maturing Commercial Debt (Balloon Prospects)"
-    assert LeadType.SARASOTA_PERSONAL_COMMERCIAL_BALLOON.value == "Sarasota Personal Commercial Balloon Clients"
-    assert LeadType.PAST_FINANCING.value == "Past Financing (Satisfied Mortgage / Certificate of Title)"
+    assert LeadType.BALLOON_PROSPECTS.value == "Commercial Balloon Prospects"
 
 
 # ---------------------------------------------------------------------------
@@ -46,7 +42,7 @@ def test_property_record_to_dict_keys():
         estimated_interest_rate="~6.81%",
         scraped_emails="john@example.com",
         county="Sarasota",
-        lead_type=LeadType.FLIPPER.value,
+        lead_type=LeadType.BALLOON_PROSPECTS.value,
     )
     d = rec.to_dict()
     required = [

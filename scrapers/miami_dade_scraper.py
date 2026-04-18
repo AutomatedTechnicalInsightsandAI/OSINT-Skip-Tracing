@@ -59,14 +59,11 @@ class MiamiDadeScraper(BaseScraper):
             "Miami-Dade: fetching '%s' leads (max %d)", lead_type.value, max_results
         )
 
-        if lead_type == LeadType.FLIPPER:
-            return self._fetch_flippers(max_results)
-        if lead_type == LeadType.HIGH_INTEREST:
-            return self._fetch_high_interest(max_results)
-        if lead_type == LeadType.MATURING_COMMERCIAL_DEBT:
+        # ⚠️ DO NOT CHANGE
+        if lead_type == LeadType.CASHOUT_REFI:
             return []
-        if lead_type == LeadType.PAST_FINANCING:
-            return self._fetch_past_financing(max_results)
+        if lead_type == LeadType.BALLOON_PROSPECTS:
+            return []
         return []
 
     # ------------------------------------------------------------------
@@ -144,7 +141,7 @@ class MiamiDadeScraper(BaseScraper):
                         ),
                         deed_type=last["instrument_type"],
                         county=self.county_name,
-                        lead_type=LeadType.FLIPPER.value,
+                        lead_type=LeadType.BALLOON_PROSPECTS.value,
                         notes="2+ transfers within 12 months",
                     )
                     records.append(rec)
@@ -173,7 +170,7 @@ class MiamiDadeScraper(BaseScraper):
                     estimated_interest_rate=estimate_interest_rate(row["rec_date"]),
                     deed_type=row["instrument_type"],
                     county=self.county_name,
-                    lead_type=LeadType.HIGH_INTEREST.value,
+                    lead_type=LeadType.BALLOON_PROSPECTS.value,
                     notes="Peak-rate mortgage 2022-2023",
                 )
                 records.append(rec)
@@ -205,7 +202,7 @@ class MiamiDadeScraper(BaseScraper):
                         ),
                         deed_type=row["instrument_type"],
                         county=self.county_name,
-                        lead_type=LeadType.PAST_FINANCING.value,
+                        lead_type=LeadType.BALLOON_PROSPECTS.value,
                     )
                     records.append(rec)
             page.context.close()

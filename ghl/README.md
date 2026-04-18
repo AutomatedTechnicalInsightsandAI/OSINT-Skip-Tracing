@@ -102,7 +102,7 @@ Default lead values per sub-vertical:
 |---|---|
 | DSCR Loan | $350 |
 | Hard Money | $450 |
-| Fix & Flip | $300 |
+| Rehab Loans | $300 |
 | Bridge Loan | $400 |
 | Commercial RE | $700 |
 | Wholesale Buyer | $200 |
