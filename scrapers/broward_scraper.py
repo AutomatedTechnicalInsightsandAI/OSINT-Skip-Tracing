@@ -88,7 +88,11 @@ class BrowardScraper(BaseScraper):
             f"&DateFrom={date_from}&DateTo={date_to}"
         )
         try:
-            page.goto(url, wait_until="networkidle")
+            page.goto(url, wait_until="domcontentloaded")
+            try:
+                page.wait_for_load_state("load", timeout=15_000)
+            except Exception:
+                pass
             self.sleep()
             self.random_scroll(page)
         except Exception as exc:

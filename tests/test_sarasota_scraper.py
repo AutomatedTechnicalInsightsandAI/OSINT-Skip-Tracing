@@ -43,6 +43,36 @@ class _FakePage:
         return RESULTS_HTML
 
 
+class _SearchPage:
+    def __init__(self, *, load_raises: bool = False, selector_raises: bool = False):
+        self.load_raises = load_raises
+        self.selector_raises = selector_raises
+        self.goto_calls = []
+        self.fill_calls = []
+        self.click_calls = []
+        self.load_wait_calls = []
+        self.selector_wait_calls = []
+
+    def goto(self, url: str, **kwargs):
+        self.goto_calls.append((url, kwargs))
+
+    def fill(self, selector: str, value: str):
+        self.fill_calls.append((selector, value))
+
+    def click(self, selector: str):
+        self.click_calls.append(selector)
+
+    def wait_for_load_state(self, state: str, timeout: int | None = None):
+        self.load_wait_calls.append((state, timeout))
+        if self.load_raises:
+            raise RuntimeError("load timeout")
+
+    def wait_for_selector(self, selector: str, **kwargs):
+        self.selector_wait_calls.append((selector, kwargs))
+        if self.selector_raises:
+            raise RuntimeError("selector timeout")
+
+
 def test_parse_results_keeps_instrument_number_and_image_url():
     scraper = SarasotaScraper(headless=True)
     rows = scraper._parse_results(_FakePage())
@@ -166,3 +196,48 @@ def test_is_likely_personal_name_rejects_bank():
 
     assert scraper._is_likely_personal_name("BANK OF AMERICA NA") is False
     assert scraper._is_likely_personal_name("LISA K SNYDER") is True
+
+
+def test_search_official_records_uses_load_timeout_and_results_selector(monkeypatch):
+    scraper = SarasotaScraper(headless=True)
+    page = _SearchPage()
+    monkeypatch.setattr(scraper, "_select_doc_type", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(scraper, "_fill_party_name", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(scraper, "sleep", lambda: None)
+    monkeypatch.setattr(scraper, "random_scroll", lambda _page: None)
+
+    scraper._search_official_records(
+        page,
+        doc_type="MORTGAGE",
+        date_from="01/01/2024",
+        date_to="12/31/2024",
+    )
+
+    assert page.goto_calls == [
+        (scraper.CLERK_URL, {"wait_until": "domcontentloaded", "timeout": 30_000})
+    ]
+    assert page.load_wait_calls == [("load", 15_000)]
+    assert page.selector_wait_calls == [
+        (
+            "#ctl00_cphBody_rgCaseList table, table",
+            {"timeout": 10_000, "state": "visible"},
+        )
+    ]
+
+
+def test_search_official_records_ignores_load_and_selector_wait_timeouts(monkeypatch):
+    scraper = SarasotaScraper(headless=True)
+    page = _SearchPage(load_raises=True, selector_raises=True)
+    monkeypatch.setattr(scraper, "_select_doc_type", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(scraper, "_fill_party_name", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(scraper, "sleep", lambda: None)
+    monkeypatch.setattr(scraper, "random_scroll", lambda _page: None)
+
+    scraper._search_official_records(
+        page,
+        doc_type="MORTGAGE",
+        date_from="01/01/2024",
+        date_to="12/31/2024",
+    )
+
+    assert page.click_calls == ["#ctl00_cphBody_bSearch_input"]
