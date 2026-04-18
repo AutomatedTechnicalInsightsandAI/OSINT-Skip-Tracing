@@ -241,3 +241,48 @@ def test_search_official_records_ignores_load_and_selector_wait_timeouts(monkeyp
     )
 
     assert page.click_calls == ["#ctl00_cphBody_bSearch_input"]
+
+
+class _FakeContext:
+    def __init__(self):
+        self.closed = False
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeLoopPage:
+    def __init__(self):
+        self.context = _FakeContext()
+
+
+def test_balloon_flows_reopen_page_after_target_closed(monkeypatch):
+    for method_name in (
+        "_fetch_maturing_commercial_debt",
+        "_fetch_sarasota_personal_commercial_balloon_clients",
+    ):
+        scraper = SarasotaScraper(headless=True)
+        first_page = _FakeLoopPage()
+        second_page = _FakeLoopPage()
+        pages = iter([first_page, second_page])
+        search_calls: list[_FakeLoopPage] = []
+
+        monkeypatch.setattr(scraper, "MATURING_SEARCH_YEARS", (2021,))
+        monkeypatch.setattr(scraper, "new_page", lambda: next(pages))
+
+        def _fake_search(page, *_args, **_kwargs):
+            search_calls.append(page)
+            if len(search_calls) == 1:
+                raise RuntimeError(
+                    "TargetClosedError('Page.evaluate: Target page, context or browser has been closed')"
+                )
+
+        monkeypatch.setattr(scraper, "_search_official_records", _fake_search)
+        monkeypatch.setattr(scraper, "_parse_results", lambda _page: [])
+
+        records = getattr(scraper, method_name)(max_results=1)
+
+        assert records == []
+        assert search_calls == [first_page, second_page]
+        assert first_page.context.closed is True
+        assert second_page.context.closed is True

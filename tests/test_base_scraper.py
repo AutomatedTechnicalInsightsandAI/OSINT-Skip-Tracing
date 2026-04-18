@@ -217,3 +217,19 @@ def test_safe_text_element():
     soup = BaseScraper.parse_html("<span>  Hello World  </span>")
     el = soup.find("span")
     assert BaseScraper.safe_text(el) == "Hello World"
+
+
+def test_random_scroll_ignores_page_evaluate_errors(monkeypatch):
+    class _BrokenPage:
+        def __init__(self):
+            self.calls = 0
+
+        def evaluate(self, _script: str):
+            self.calls += 1
+            raise RuntimeError("TargetClosedError")
+
+    page = _BrokenPage()
+    monkeypatch.setattr("scrapers.base_scraper.time.sleep", lambda _seconds: None)
+    BaseScraper.random_scroll(page)
+
+    assert page.calls == 1

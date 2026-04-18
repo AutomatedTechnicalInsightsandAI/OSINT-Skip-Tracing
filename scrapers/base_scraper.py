@@ -339,9 +339,12 @@ class BaseScraper(ABC):
     @staticmethod
     def random_scroll(page) -> None:
         """Scroll the page by a random amount to simulate reading."""
-        scroll_y = random.randint(300, 900)
-        page.evaluate(f"window.scrollBy(0, {scroll_y})")
-        time.sleep(random.uniform(0.3, 1.2))
+        try:
+            scroll_y = random.randint(300, 900)
+            page.evaluate(f"window.scrollBy(0, {scroll_y})")
+            time.sleep(random.uniform(0.3, 1.2))
+        except Exception as exc:
+            logger.debug("random_scroll skipped: %s", repr(exc))
 
     # ------------------------------------------------------------------
     # HTML parsing helpers
