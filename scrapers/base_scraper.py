@@ -343,8 +343,8 @@ class BaseScraper(ABC):
             scroll_y = random.randint(300, 900)
             page.evaluate(f"window.scrollBy(0, {scroll_y})")
             time.sleep(random.uniform(0.3, 1.2))
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.debug("random_scroll skipped: %s", repr(exc))
 
     # ------------------------------------------------------------------
     # HTML parsing helpers

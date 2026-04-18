@@ -1429,11 +1429,12 @@ class SarasotaScraper(BaseScraper):
         if stale_page is not None:
             try:
                 stale_page.context.close()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.debug("Sarasota balloon: stale page close failed: %s", repr(exc))
         try:
             return self.new_page()
-        except Exception:
+        except Exception as exc:
+            logger.warning("Sarasota balloon: new_page failed, restarting browser: %s", repr(exc))
             self.start_browser()
             return self.new_page()
 
