@@ -36,6 +36,7 @@ class MortgageDocumentInfo:
     credit_limit: str = ""
     interest_rate: str = ""
     maturity_date: str = ""
+    balloon_balance: str = ""
     doc_stamp_mortgage: str = ""
     intangible_tax: str = ""
     extraction_method: str = "none"
@@ -107,6 +108,7 @@ def parse_mortgage_document_info(text: str) -> MortgageDocumentInfo:
     info.borrower_name = _clean_phrase(
         _search_first(
             [
+                r"Borrower.{0,20}name\s+and\s+address\s+is:\s*(.*?),\s*(?:a\s+married|a\s+single|whose\s+post\s+office)",
                 r"[\"']?Borrower.{0,25}?\bis\b\s+(.+?)\s+the party or parties who have signed this Security Instrument",
                 r"[\"']?Borrower.{0,25}?\bis\b\s+(.+?)\s+Borrower is the Mortgagor",
             ],
@@ -150,6 +152,7 @@ def parse_mortgage_document_info(text: str) -> MortgageDocumentInfo:
     info.maturity_date = _normalize_date_phrase(
         _search_first(
             [
+                r"due\s+by\s+([A-Za-z]+\s+\d{1,2},\s+\d{4})",
                 r"Maturity\s+Date.{0,500}?((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}[,\.]?\s+\d{4})",
                 r"Maturity\s+Date.*?Instrument,\s+is\s+due\s+on\s+(.+?)\s+(?:as\s|Borrower|The\s+Note|$)",
                 r"Maturity\s+Date.*?due\s+on\s+(.+?)\s+(?:as\s|Borrower|The\s+Note|$)",
@@ -157,6 +160,14 @@ def parse_mortgage_document_info(text: str) -> MortgageDocumentInfo:
             ],
             flattened,
             flags=re.IGNORECASE | re.DOTALL,
+        )
+    )
+
+    info.balloon_balance = _normalize_money(
+        _search_first(
+            [r"BALANCE\s+DUE\s+UPON\s+MATURITY\s+IS\s+\$([\d,]+(?:\.\d{1,2})?)"],
+            flattened,
+            flags=re.IGNORECASE,
         )
     )
 
@@ -310,3 +321,24 @@ def _normalize_percent(value: str) -> str:
     if not match:
         return ""
     return f"{match.group(1)}%"
+
+
+def _parse_date_flexible(date_str: str):
+    if not date_str:
+        return None
+    try:
+        from dateutil import parser as _dp
+
+        return _dp.parse(date_str, fuzzy=True)
+    except Exception:
+        return None
+
+
+def estimate_principal_from_doc_stamp(doc_stamp_str: str) -> float:
+    try:
+        amount = float((doc_stamp_str or "").replace(",", "").replace("$", "").strip())
+        if amount <= 0:
+            return 0.0
+        return round((amount / 0.35) * 100, 2)
+    except (ValueError, ZeroDivisionError):
+        return 0.0

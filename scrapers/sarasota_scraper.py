@@ -30,7 +30,11 @@ from scrapers.base_scraper import (
     estimate_interest_rate,
     parse_record_date,
 )
-from utils.pdf_reader import extract_mortgage_document_info
+from utils.pdf_reader import (
+    _parse_date_flexible,
+    estimate_principal_from_doc_stamp,
+    extract_mortgage_document_info,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +109,7 @@ class SarasotaScraper(BaseScraper):
     COMMERCIAL_DOC_PHRASES = {
         "COMMERCIAL",
         "BUSINESS PURPOSE",
+        "NON-HOMESTEAD",
         "ASSIGNMENT OF LEASES AND RENTS",
         "ASSIGNMENT OF RENTS",
         "SECURITY AGREEMENT",
@@ -728,6 +733,7 @@ class SarasotaScraper(BaseScraper):
             "credit_limit": info.credit_limit,
             "interest_rate": info.interest_rate,
             "maturity_date": info.maturity_date,
+            "balloon_balance": info.balloon_balance,
             "doc_stamp_mortgage": info.doc_stamp_mortgage,
             "intangible_tax": info.intangible_tax,
             "extraction_method": info.extraction_method,
@@ -806,6 +812,7 @@ class SarasotaScraper(BaseScraper):
         record.instrument_number = terms.get("instrument_number", "") or instrument_number
         record.view_image_url = image_url
         record.owner_name = terms.get("borrower_name", "") or record.owner_name
+        record.owner_name = record.owner_name.replace("\n", " ").strip()
         record.lender_name = terms.get("lender_name", "")
         record.maturity_date = terms.get("maturity_date", "")
         record.pdf_extraction_method = terms.get("extraction_method", "")
@@ -817,6 +824,15 @@ class SarasotaScraper(BaseScraper):
         if credit_limit:
             record.mtg_amt_at_purchase = credit_limit
             record.mtg_amt_source = "Sarasota Clerk OCR: Credit Limit from recorded mortgage PDF"
+        elif terms.get("doc_stamp_mortgage") and not record.mtg_amt_at_purchase:
+            estimated_principal = estimate_principal_from_doc_stamp(
+                terms.get("doc_stamp_mortgage", "")
+            )
+            if estimated_principal > 0:
+                record.mtg_amt_at_purchase = f"{estimated_principal:.2f}"
+                record.mtg_amt_source = (
+                    "Sarasota Clerk OCR: Estimated principal from doc stamp"
+                )
         if terms.get("interest_rate"):
             record.estimated_interest_rate = terms["interest_rate"]
 
@@ -1104,6 +1120,7 @@ class SarasotaScraper(BaseScraper):
         """
         upper = " ".join((pdf_text or "").upper().split())
         patterns = [
+            r"BALANCE\s+DUE\s+UPON\s+MATURITY\s+IS\s+\$([\d,]+(?:\.\d{1,2})?)",
             r"THIS\s+IS\s+A\s+BALLOON\s+MORTGAGE.{0,200}?"
             r"FINAL\s+PRINCIPAL\s+PAYMENT\s+OR\s+THE\s+PRINCIPAL\s+BALANCE\s+DUE\s+UPON\s+MATURITY\s+IS[^$\d]{0,40}"
             r"\$?\s*([\d,]+(?:\.\d{1,2})?)",
@@ -1217,7 +1234,7 @@ class SarasotaScraper(BaseScraper):
                     balloon_balance = self._extract_balloon_balance(terms.get("pdf_text", ""))
                     if balloon_balance > 0 and balloon_balance < self.MIN_BALLOON_BALANCE:
                         continue
-                    maturity_dt = parse_record_date(terms.get("maturity_date", ""))
+                    maturity_dt = _parse_date_flexible(terms.get("maturity_date", ""))
                     if not maturity_dt:
                         continue
                     maturity_date = maturity_dt.date()
@@ -1832,7 +1849,7 @@ class SarasotaScraper(BaseScraper):
                     balloon_balance = self._extract_balloon_balance(terms.get("pdf_text", ""))
                     if balloon_balance > 0 and balloon_balance < self.MIN_BALLOON_BALANCE:
                         continue
-                    maturity_dt = parse_record_date(terms.get("maturity_date", ""))
+                    maturity_dt = _parse_date_flexible(terms.get("maturity_date", ""))
                     if not maturity_dt:
                         continue
                     maturity_date = maturity_dt.date()
@@ -1873,6 +1890,15 @@ class SarasotaScraper(BaseScraper):
                         note_bits.append(f"Balloon Balance: ${balloon_balance:,.0f}")
                     if record.property_type:
                         note_bits.append(f"Property Type: {record.property_type}")
+                    commercial_borrower = bool(
+                        re.search(
+                            r"\b(LLC|INC|CORP|CORPORATION|TRUST|TRUSTEE|LP|LTD|PARTNERS)\b",
+                            borrower_name.upper(),
+                        )
+                    )
+                    note_bits.append(
+                        f"Commercial Borrower: {'True' if commercial_borrower else 'False'}"
+                    )
                     record.notes = " | ".join(dict.fromkeys([bit for bit in note_bits if bit]))
                     records.append(record)
 
@@ -1963,7 +1989,7 @@ class SarasotaScraper(BaseScraper):
 
                     scanned += 1
                     terms = self._extract_mortgage_pdf_terms(pdf_bytes)
-                    maturity_dt = parse_record_date(terms.get("maturity_date", ""))
+                    maturity_dt = _parse_date_flexible(terms.get("maturity_date", ""))
                     if not maturity_dt:
                         continue
                     maturity_date = maturity_dt.date()
@@ -2029,6 +2055,15 @@ class SarasotaScraper(BaseScraper):
                         note_bits.append(f"Balloon Balance: ${balloon_balance:,.0f}")
                     note_bits.append(f"Current exemptions: ${record.current_exemptions or '0'}")
                     note_bits.append(f"Interest threshold met: {terms.get('interest_rate', '')}")
+                    commercial_borrower = bool(
+                        re.search(
+                            r"\b(LLC|INC|CORP|CORPORATION|TRUST|TRUSTEE|LP|LTD|PARTNERS)\b",
+                            borrower_name.upper(),
+                        )
+                    )
+                    note_bits.append(
+                        f"Commercial Borrower: {'True' if commercial_borrower else 'False'}"
+                    )
                     record.notes = " | ".join(dict.fromkeys([bit for bit in note_bits if bit]))
                     records.append(record)
 

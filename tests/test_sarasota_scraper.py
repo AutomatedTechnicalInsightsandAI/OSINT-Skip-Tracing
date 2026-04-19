@@ -135,6 +135,29 @@ def test_enrich_record_from_clerk_pdf_uses_ocr_terms(monkeypatch):
     assert "Maturity Date: April 1, 2056" in enriched.notes
 
 
+def test_apply_clerk_pdf_terms_uses_doc_stamp_fallback_and_cleans_owner_name():
+    scraper = SarasotaScraper(headless=True)
+    record = PropertyRecord(owner_name="Original Owner", county="Sarasota")
+
+    enriched = scraper._apply_clerk_pdf_terms(
+        record,
+        {
+            "image_url": "https://secure.sarasotaclerk.com/viewTiff.aspx?intrnum=2026047868",
+            "instrument_number": "2026047868",
+        },
+        {
+            "instrument_number": "2026047868",
+            "borrower_name": "SUNCOAST\nOFFICE PARTNERS LLC",
+            "doc_stamp_mortgage": "980.00",
+            "pdf_text": "",
+        },
+    )
+
+    assert enriched.owner_name == "SUNCOAST OFFICE PARTNERS LLC"
+    assert enriched.mtg_amt_at_purchase == "280000.00"
+    assert enriched.mtg_amt_source == "Sarasota Clerk OCR: Estimated principal from doc stamp"
+
+
 def test_is_likely_commercial_mortgage_rejects_consumer_heloc():
     scraper = SarasotaScraper(headless=True)
 
@@ -324,6 +347,7 @@ def test_fetch_personal_commercial_balloon_client_adds_balloon_balance_note(monk
 
     assert len(records) == 1
     assert "Balloon Balance: $180,000" in records[0].notes
+    assert "Commercial Borrower: False" in records[0].notes
     assert page.context.closed is True
 
 
@@ -465,3 +489,53 @@ def test_balloon_flows_reopen_page_after_target_closed(monkeypatch):
         assert search_calls == [first_page, second_page]
         assert first_page.context.closed is True
         assert second_page.context.closed is True
+
+
+def test_fetch_maturing_commercial_debt_adds_commercial_borrower_flag(monkeypatch):
+    scraper = SarasotaScraper(headless=True)
+    page = _FakeLoopPage()
+    maturity_dt = datetime.now() + timedelta(days=120)
+    day = maturity_dt.day
+    suffix = "th" if 11 <= day % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
+    maturity_date = f"to be due by {day}{suffix} day of {maturity_dt.strftime('%B, %Y')} (Maturity Date)"
+
+    monkeypatch.setattr(scraper, "MATURING_SEARCH_YEARS", (2021,))
+    monkeypatch.setattr(scraper, "new_page", lambda: page)
+    monkeypatch.setattr(scraper, "_search_official_records", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        scraper,
+        "_parse_results",
+        lambda _page: [
+            {
+                "instrument_number": "2021000003",
+                "image_url": "https://secure.sarasotaclerk.com/viewTiff.aspx?intrnum=2021000003",
+                "instrument_type": "MORTGAGE",
+                "rec_date": "04/01/2021",
+                "grantee": "SUNCOAST PARTNERS LLC",
+            }
+        ],
+    )
+    monkeypatch.setattr(scraper, "_download_clerk_pdf", lambda **_kwargs: b"%PDF")
+    monkeypatch.setattr(
+        scraper,
+        "_extract_mortgage_pdf_terms",
+        lambda _pdf: {
+            "borrower_name": "SUNCOAST PARTNERS LLC",
+            "maturity_date": maturity_date,
+            "pdf_text": (
+                "THIS IS A BALLOON MORTGAGE. THE FINAL PRINCIPAL PAYMENT OR THE "
+                "PRINCIPAL BALANCE DUE UPON MATURITY IS $180,000.00."
+            ),
+        },
+    )
+    monkeypatch.setattr(scraper, "_enrich_record_from_pa_owner_search", lambda record, _name: record)
+    monkeypatch.setattr(
+        scraper,
+        "_is_likely_commercial_mortgage",
+        lambda **_kwargs: (True, "entity-borrower"),
+    )
+
+    records = scraper._fetch_maturing_commercial_debt(max_results=5)
+
+    assert len(records) == 1
+    assert "Commercial Borrower: True" in records[0].notes
