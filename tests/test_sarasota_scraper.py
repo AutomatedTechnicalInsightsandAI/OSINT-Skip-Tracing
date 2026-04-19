@@ -4,6 +4,8 @@ Targeted tests for Sarasota result parsing and clerk PDF enrichment hooks.
 
 from __future__ import annotations
 
+from datetime import datetime, timedelta
+
 from scrapers.base_scraper import LeadType, PropertyRecord
 from scrapers.sarasota_scraper import SarasotaScraper
 
@@ -196,6 +198,120 @@ def test_is_likely_personal_name_rejects_bank():
 
     assert scraper._is_likely_personal_name("BANK OF AMERICA NA") is False
     assert scraper._is_likely_personal_name("LISA K SNYDER") is True
+
+
+def test_extract_balloon_balance_from_sarasota_maturity_language():
+    scraper = SarasotaScraper(headless=True)
+    text = (
+        "BALLOON PURCHASE MONEY MORTGAGE\n"
+        "THIS IS A BALLOON MORTGAGE AND THE FINAL PRINCIPAL PAYMENT OR THE "
+        "PRINCIPAL BALANCE DUE UPON MATURITY IS $180,000.00, TOGETHER WITH ACCRUED INTEREST."
+    )
+
+    assert scraper._extract_balloon_balance(text) == 180000.0
+    assert scraper._has_balloon_signal(text)[0] is True
+
+
+def test_fetch_maturing_commercial_debt_skips_below_min_balloon_balance(monkeypatch):
+    scraper = SarasotaScraper(headless=True)
+    page = _FakeLoopPage()
+    maturity_date = (datetime.now() + timedelta(days=30)).strftime("%m/%d/%Y")
+
+    monkeypatch.setattr(scraper, "MATURING_SEARCH_YEARS", (2021,))
+    monkeypatch.setattr(scraper, "new_page", lambda: page)
+    monkeypatch.setattr(scraper, "_search_official_records", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        scraper,
+        "_parse_results",
+        lambda _page: [
+            {
+                "instrument_number": "2021000001",
+                "image_url": "https://secure.sarasotaclerk.com/viewTiff.aspx?intrnum=2021000001",
+                "instrument_type": "MORTGAGE",
+                "rec_date": "04/01/2021",
+                "grantee": "SUNCOAST OFFICE PARK LLC",
+            }
+        ],
+    )
+    monkeypatch.setattr(scraper, "_download_clerk_pdf", lambda **_kwargs: b"%PDF")
+    monkeypatch.setattr(
+        scraper,
+        "_extract_mortgage_pdf_terms",
+        lambda _pdf: {
+            "borrower_name": "SUNCOAST OFFICE PARK LLC",
+            "maturity_date": maturity_date,
+            "pdf_text": (
+                "FINAL PRINCIPAL PAYMENT OR THE PRINCIPAL BALANCE DUE UPON MATURITY "
+                "IS $79,999.00"
+            ),
+        },
+    )
+    monkeypatch.setattr(scraper, "_enrich_record_from_pa_owner_search", lambda record, _name: record)
+    monkeypatch.setattr(
+        scraper,
+        "_is_likely_commercial_mortgage",
+        lambda **_kwargs: (True, "commercial-doc-phrase"),
+    )
+
+    records = scraper._fetch_maturing_commercial_debt(max_results=5)
+
+    assert records == []
+    assert page.context.closed is True
+
+
+def test_fetch_personal_commercial_balloon_client_adds_balloon_balance_note(monkeypatch):
+    scraper = SarasotaScraper(headless=True)
+    page = _FakeLoopPage()
+    maturity_date = (datetime.now() + timedelta(days=30)).strftime("%m/%d/%Y")
+
+    monkeypatch.setattr(scraper, "MATURING_SEARCH_YEARS", (2021,))
+    monkeypatch.setattr(scraper, "new_page", lambda: page)
+    monkeypatch.setattr(scraper, "_search_official_records", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        scraper,
+        "_parse_results",
+        lambda _page: [
+            {
+                "instrument_number": "2021000002",
+                "image_url": "https://secure.sarasotaclerk.com/viewTiff.aspx?intrnum=2021000002",
+                "instrument_type": "MORTGAGE",
+                "rec_date": "04/01/2021",
+                "grantee": "LISA K SNYDER",
+            }
+        ],
+    )
+    monkeypatch.setattr(scraper, "_download_clerk_pdf", lambda **_kwargs: b"%PDF")
+    monkeypatch.setattr(
+        scraper,
+        "_extract_mortgage_pdf_terms",
+        lambda _pdf: {
+            "borrower_name": "LISA K SNYDER",
+            "maturity_date": maturity_date,
+            "interest_rate": "8.50%",
+            "pdf_text": (
+                "BALLOON PURCHASE MONEY MORTGAGE. THE FINAL PRINCIPAL PAYMENT OR THE "
+                "PRINCIPAL BALANCE DUE UPON MATURITY IS $180,000.00."
+            ),
+        },
+    )
+
+    def _enrich(record, _name):
+        record.property_type = "Commercial Office"
+        record.parcel_id = "1234567890"
+        return record
+
+    monkeypatch.setattr(scraper, "_enrich_record_from_pa_owner_search", _enrich)
+    monkeypatch.setattr(
+        scraper,
+        "_fetch_pa_details",
+        lambda _parcel_id: {"has_current_exemption": "false", "current_exemptions": "0"},
+    )
+
+    records = scraper._fetch_sarasota_personal_commercial_balloon_clients(max_results=5)
+
+    assert len(records) == 1
+    assert "Balloon Balance: $180,000" in records[0].notes
+    assert page.context.closed is True
 
 
 def test_search_official_records_uses_load_timeout_and_results_selector(monkeypatch):

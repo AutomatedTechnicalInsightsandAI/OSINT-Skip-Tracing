@@ -62,6 +62,10 @@ class SarasotaScraper(BaseScraper):
     MATURING_SCAN_MINIMUM = 60
     TARGETED_BALLOON_WINDOW_DAYS = 183
     TARGETED_MIN_INTEREST_RATE = 8.0
+    MIN_BALLOON_BALANCE = 80_000
+    PDF_DOWNLOAD_DELAY_SECONDS = 3.0
+    PDF_DOWNLOAD_MAX_RETRIES = 3
+    PDF_DOWNLOAD_RETRY_BASE_WAIT = 10
     COMMERCIAL_ENTITY_TOKENS = {
         "LLC",
         "L.L.C",
@@ -221,11 +225,13 @@ class SarasotaScraper(BaseScraper):
     BALLOON_SIGNAL_PHRASES = {
         "BALLOON",
         "BALLOON PAYMENT",
+        "BALLOON PURCHASE MONEY MORTGAGE",
         "ENTIRE ACCOUNT BALANCE",
         "ENTIRE UNPAID PRINCIPAL BALANCE",
         "ENTIRE PRINCIPAL BALANCE",
         "ALL SUMS SECURED BY THIS SECURITY INSTRUMENT",
         "FINAL PAYMENT",
+        "PRINCIPAL BALANCE DUE UPON MATURITY",
     }
 
     def __init__(self, headless: bool = False, timeout_ms: int = 30_000):
@@ -731,7 +737,9 @@ class SarasotaScraper(BaseScraper):
         image_url: str = "",
         instrument_number: str = "",
     ) -> bytes:
-        """Download a Sarasota clerk PDF for a result row."""
+        """Download a Sarasota clerk PDF, with rate-limit delay and retry backoff."""
+        import time
+
         url = image_url.strip()
         if not url and instrument_number.strip():
             url = urljoin(
@@ -741,23 +749,47 @@ class SarasotaScraper(BaseScraper):
         if not url:
             return b""
 
-        try:
-            response = requests.get(
-                url,
-                timeout=60,
-                headers={
-                    "User-Agent": (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/122.0.0.0 Safari/537.36"
-                    )
-                },
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/122.0.0.0 Safari/537.36"
             )
-            response.raise_for_status()
-            return response.content
-        except Exception as exc:
-            logger.warning("Sarasota clerk PDF download failed for %s: %s", url, repr(exc))
-            return b""
+        }
+
+        for attempt in range(self.PDF_DOWNLOAD_MAX_RETRIES + 1):
+            time.sleep(self.PDF_DOWNLOAD_DELAY_SECONDS)
+            try:
+                response = requests.get(url, timeout=60, headers=headers)
+                response.raise_for_status()
+                return response.content
+            except Exception as exc:
+                exc_text = repr(exc)
+                is_reset = (
+                    "ConnectionResetError" in exc_text
+                    or "Connection aborted" in exc_text
+                    or "ERR_CONNECTION_RESET" in exc_text
+                    or "ConnectionError" in exc_text
+                )
+                if is_reset and attempt < self.PDF_DOWNLOAD_MAX_RETRIES:
+                    wait = self.PDF_DOWNLOAD_RETRY_BASE_WAIT * (2 ** attempt)
+                    logger.warning(
+                        "Sarasota clerk PDF connection reset for %s (attempt %d/%d), "
+                        "retrying in %ds: %s",
+                        instrument_number or url,
+                        attempt + 1,
+                        self.PDF_DOWNLOAD_MAX_RETRIES,
+                        wait,
+                        repr(exc),
+                    )
+                    time.sleep(wait)
+                    continue
+                logger.warning(
+                    "Sarasota clerk PDF download failed for %s: %s", url, repr(exc)
+                )
+                return b""
+
+        return b""
 
     def _apply_clerk_pdf_terms(
         self,
@@ -1051,6 +1083,29 @@ class SarasotaScraper(BaseScraper):
             if phrase in upper_text:
                 return True, phrase.lower().replace(" ", "-")
         return False, "no-balloon-signal"
+
+    @classmethod
+    def _extract_balloon_balance(cls, pdf_text: str) -> float:
+        """
+        Parse the balloon principal balance from Sarasota clerk mortgage PDF text.
+
+        Handles patterns like:
+          "PRINCIPAL BALANCE DUE UPON MATURITY IS $180,000.00"
+          "FINAL PRINCIPAL PAYMENT OR THE PRINCIPAL BALANCE DUE UPON MATURITY IS $95,000"
+        Returns 0.0 if not found.
+        """
+        upper = " ".join((pdf_text or "").upper().split())
+        match = re.search(
+            r"(?:PRINCIPAL BALANCE DUE UPON MATURITY|FINAL PRINCIPAL PAYMENT)[^$\d]{0,60}"
+            r"\$?([\d,]+(?:\.\d{1,2})?)",
+            upper,
+        )
+        if match:
+            try:
+                return float(match.group(1).replace(",", ""))
+            except ValueError:
+                pass
+        return 0.0
 
     def _fetch_cashout_refi(self, max_results: int) -> List[PropertyRecord]:
         """
@@ -1624,6 +1679,9 @@ class SarasotaScraper(BaseScraper):
 
                     scanned += 1
                     terms = self._extract_mortgage_pdf_terms(pdf_bytes)
+                    balloon_balance = self._extract_balloon_balance(terms.get("pdf_text", ""))
+                    if balloon_balance > 0 and balloon_balance < self.MIN_BALLOON_BALANCE:
+                        continue
                     maturity_dt = parse_record_date(terms.get("maturity_date", ""))
                     if not maturity_dt:
                         continue
@@ -1659,6 +1717,8 @@ class SarasotaScraper(BaseScraper):
 
                     note_bits = [record.notes] if record.notes else []
                     note_bits.append(f"Commercial signal: {commercial_reason}")
+                    if balloon_balance > 0:
+                        note_bits.append(f"Balloon Balance: ${balloon_balance:,.0f}")
                     if record.property_type:
                         note_bits.append(f"Property Type: {record.property_type}")
                     record.notes = " | ".join(dict.fromkeys([bit for bit in note_bits if bit]))
@@ -1772,6 +1832,9 @@ class SarasotaScraper(BaseScraper):
                     )
                     if not has_balloon_signal:
                         continue
+                    balloon_balance = self._extract_balloon_balance(terms.get("pdf_text", ""))
+                    if balloon_balance > 0 and balloon_balance < self.MIN_BALLOON_BALANCE:
+                        continue
 
                     record = PropertyRecord(
                         owner_name=borrower_name,
@@ -1809,6 +1872,8 @@ class SarasotaScraper(BaseScraper):
                     note_bits = [record.notes] if record.notes else []
                     note_bits.append("Commercial signal: commercial-property-type")
                     note_bits.append(f"Balloon signal: {balloon_reason}")
+                    if balloon_balance > 0:
+                        note_bits.append(f"Balloon Balance: ${balloon_balance:,.0f}")
                     note_bits.append(f"Current exemptions: ${record.current_exemptions or '0'}")
                     note_bits.append(f"Interest threshold met: {terms.get('interest_rate', '')}")
                     record.notes = " | ".join(dict.fromkeys([bit for bit in note_bits if bit]))
