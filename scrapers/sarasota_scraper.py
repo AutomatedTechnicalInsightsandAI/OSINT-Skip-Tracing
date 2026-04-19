@@ -30,7 +30,11 @@ from scrapers.base_scraper import (
     estimate_interest_rate,
     parse_record_date,
 )
-from utils.pdf_reader import extract_mortgage_document_info
+from utils.pdf_reader import (
+    _parse_date_flexible,
+    estimate_principal_from_doc_stamp,
+    extract_mortgage_document_info,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +111,7 @@ class SarasotaScraper(BaseScraper):
         "BUSINESS PURPOSE",
         "ASSIGNMENT OF LEASES AND RENTS",
         "ASSIGNMENT OF RENTS",
+        "NON-HOMESTEAD",
         "SECURITY AGREEMENT",
         "FIXTURE FILING",
         "UCC",
@@ -210,6 +215,17 @@ class SarasotaScraper(BaseScraper):
         "PARTNERSHIP",
     }
     PERSONAL_NAME_SUFFIXES = {"JR", "SR", "II", "III", "IV", "V"}
+    COMMERCIAL_BORROWER_KEYWORDS = {
+        "LLC",
+        "INC",
+        "CORP",
+        "CORPORATION",
+        "TRUST",
+        "TRUSTEE",
+        "LP",
+        "LTD",
+        "PARTNERS",
+    }
     PERSONAL_NAME_STOPWORDS = {
         "AND",
         "HUSBAND",
@@ -805,7 +821,19 @@ class SarasotaScraper(BaseScraper):
         instrument_number = row.get("instrument_number", "")
         record.instrument_number = terms.get("instrument_number", "") or instrument_number
         record.view_image_url = image_url
-        record.owner_name = terms.get("borrower_name", "") or record.owner_name
+        record.owner_name = (
+            (terms.get("borrower_name", "") or record.owner_name).replace("\n", " ").strip()
+        )
+        record.property_address = (
+            (terms.get("property_address", "") or record.property_address)
+            .replace("\n", " ")
+            .strip()
+        )
+        record.mailing_address = (
+            (terms.get("mailing_address", "") or record.mailing_address)
+            .replace("\n", " ")
+            .strip()
+        )
         record.lender_name = terms.get("lender_name", "")
         record.maturity_date = terms.get("maturity_date", "")
         record.pdf_extraction_method = terms.get("extraction_method", "")
@@ -817,6 +845,13 @@ class SarasotaScraper(BaseScraper):
         if credit_limit:
             record.mtg_amt_at_purchase = credit_limit
             record.mtg_amt_source = "Sarasota Clerk OCR: Credit Limit from recorded mortgage PDF"
+        elif balloon_balance == 0 and terms.get("doc_stamp_mortgage"):
+            estimated_principal = estimate_principal_from_doc_stamp(
+                terms.get("doc_stamp_mortgage", "")
+            )
+            if estimated_principal > 0:
+                record.mtg_amt_at_purchase = f"{estimated_principal:.2f}"
+                record.mtg_amt_source = "Estimated from FL doc stamp ($0.35/$100)"
         if terms.get("interest_rate"):
             record.estimated_interest_rate = terms["interest_rate"]
 
@@ -1103,24 +1138,25 @@ class SarasotaScraper(BaseScraper):
         Returns 0.0 if not found.
         """
         upper = " ".join((pdf_text or "").upper().split())
-        patterns = [
-            r"THIS\s+IS\s+A\s+BALLOON\s+MORTGAGE.{0,200}?"
-            r"FINAL\s+PRINCIPAL\s+PAYMENT\s+OR\s+THE\s+PRINCIPAL\s+BALANCE\s+DUE\s+UPON\s+MATURITY\s+IS[^$\d]{0,40}"
-            r"\$?\s*([\d,]+(?:\.\d{1,2})?)",
-            r"FINAL\s+PRINCIPAL\s+PAYMENT\s+OR\s+THE\s+PRINCIPAL\s+BALANCE\s+DUE\s+UPON\s+MATURITY\s+IS[^$\d]{0,40}"
-            r"\$?\s*([\d,]+(?:\.\d{1,2})?)",
-            r"PRINCIPAL\s+BALANCE\s+DUE\s+UPON\s+MATURITY\s+IS[^$\d]{0,40}"
-            r"\$?\s*([\d,]+(?:\.\d{1,2})?)",
-            r"FINAL\s+PRINCIPAL\s+PAYMENT[^$\d]{0,60}\$?\s*([\d,]+(?:\.\d{1,2})?)",
-        ]
-        for pattern in patterns:
-            match = re.search(pattern, upper)
-            if not match:
-                continue
+        match = re.search(
+            r"BALANCE\s+DUE\s+UPON\s+MATURITY\s+IS\s+\$([\d,]+\.\d{2})",
+            upper,
+        )
+        if match:
             try:
                 return float(match.group(1).replace(",", ""))
             except ValueError:
-                continue
+                pass
+        match = re.search(
+            r"(?:PRINCIPAL BALANCE DUE UPON MATURITY|FINAL PRINCIPAL PAYMENT)[^$\d]{0,60}"
+            r"\$?([\d,]+(?:\.\d{1,2})?)",
+            upper,
+        )
+        if match:
+            try:
+                return float(match.group(1).replace(",", ""))
+            except ValueError:
+                pass
         return 0.0
 
     @staticmethod
@@ -1217,7 +1253,7 @@ class SarasotaScraper(BaseScraper):
                     balloon_balance = self._extract_balloon_balance(terms.get("pdf_text", ""))
                     if balloon_balance > 0 and balloon_balance < self.MIN_BALLOON_BALANCE:
                         continue
-                    maturity_dt = parse_record_date(terms.get("maturity_date", ""))
+                    maturity_dt = _parse_date_flexible(terms.get("maturity_date", ""))
                     if not maturity_dt:
                         continue
                     maturity_date = maturity_dt.date()
@@ -1227,6 +1263,10 @@ class SarasotaScraper(BaseScraper):
                     borrower_name = terms.get("borrower_name", "").strip() or row.get("grantee", "")
                     if not borrower_name:
                         continue
+                    is_commercial_borrower = any(
+                        kw in (borrower_name or "").upper().split()
+                        for kw in self.COMMERCIAL_BORROWER_KEYWORDS
+                    )
 
                     record = PropertyRecord(
                         owner_name=borrower_name,
@@ -1245,6 +1285,10 @@ class SarasotaScraper(BaseScraper):
                     )
                     record = self._apply_clerk_pdf_terms(record, row, terms)
                     record = self._enrich_record_from_pa_owner_search(record, borrower_name)
+                    record.notes = (
+                        (record.notes or "")
+                        + f" | Commercial Borrower: {is_commercial_borrower}"
+                    ).strip()
                     records.append(record)
 
             page.context.close()
@@ -1832,7 +1876,7 @@ class SarasotaScraper(BaseScraper):
                     balloon_balance = self._extract_balloon_balance(terms.get("pdf_text", ""))
                     if balloon_balance > 0 and balloon_balance < self.MIN_BALLOON_BALANCE:
                         continue
-                    maturity_dt = parse_record_date(terms.get("maturity_date", ""))
+                    maturity_dt = _parse_date_flexible(terms.get("maturity_date", ""))
                     if not maturity_dt:
                         continue
                     maturity_date = maturity_dt.date()
@@ -1963,7 +2007,7 @@ class SarasotaScraper(BaseScraper):
 
                     scanned += 1
                     terms = self._extract_mortgage_pdf_terms(pdf_bytes)
-                    maturity_dt = parse_record_date(terms.get("maturity_date", ""))
+                    maturity_dt = _parse_date_flexible(terms.get("maturity_date", ""))
                     if not maturity_dt:
                         continue
                     maturity_date = maturity_dt.date()

@@ -435,6 +435,73 @@ def test_fetch_balloon_balance_leads_uses_3_to_6_month_window_and_populates_bala
     assert page.context.closed is True
 
 
+def test_apply_clerk_pdf_terms_estimates_principal_from_doc_stamp_when_balloon_missing():
+    scraper = SarasotaScraper(headless=True)
+    record = PropertyRecord(owner_name="Existing Name")
+
+    updated = scraper._apply_clerk_pdf_terms(
+        record,
+        {"instrument_number": "2021009999", "image_url": ""},
+        {
+            "borrower_name": "AMY M\nPINTUS",
+            "doc_stamp_mortgage": "980.00",
+            "pdf_text": "Mortgage text with no explicit balloon amount.",
+            "maturity_date": "November 10, 2026",
+        },
+    )
+
+    assert updated.owner_name == "AMY M PINTUS"
+    assert updated.mtg_amt_at_purchase == "280000.00"
+    assert updated.mtg_amt_source == "Estimated from FL doc stamp ($0.35/$100)"
+
+
+def test_fetch_balloon_balance_leads_marks_commercial_borrower(monkeypatch):
+    scraper = SarasotaScraper(headless=True)
+    page = _FakeLoopPage()
+    maturity_date = (datetime.now() + timedelta(days=120)).strftime("%B %d, %Y")
+
+    monkeypatch.setattr(scraper, "MATURING_SEARCH_YEARS", (2021,))
+    monkeypatch.setattr(scraper, "new_page", lambda: page)
+    monkeypatch.setattr(scraper, "_search_official_records", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        scraper,
+        "_parse_results",
+        lambda _page: [
+            {
+                "instrument_number": "2021007958",
+                "image_url": "https://secure.sarasotaclerk.com/viewTiff.aspx?intrnum=2021007958",
+                "instrument_type": "MORTGAGE",
+                "rec_date": "04/01/2021",
+                "grantee": "SUNCOAST OFFICE PARK LLC",
+            }
+        ],
+    )
+    monkeypatch.setattr(scraper, "_download_clerk_pdf", lambda **_kwargs: b"%PDF")
+    monkeypatch.setattr(
+        scraper,
+        "_extract_mortgage_pdf_terms",
+        lambda _pdf: {
+            "instrument_number": "2021007958",
+            "borrower_name": "SUNCOAST OFFICE PARK LLC",
+            "maturity_date": maturity_date,
+            "pdf_text": (
+                "THIS IS A BALLOON MORTGAGE AND THE PRINCIPAL BALANCE DUE UPON MATURITY "
+                "IS $280,000.00"
+            ),
+        },
+    )
+    monkeypatch.setattr(scraper, "_enrich_record_from_pa_owner_search", lambda record, _name: record)
+
+    records = scraper._fetch_balloon_balance_leads(max_results=5)
+
+    assert len(records) == 1
+    assert "Commercial Borrower: True" in records[0].notes
+
+
+def test_commercial_doc_phrases_include_non_homestead():
+    assert "NON-HOMESTEAD" in SarasotaScraper.COMMERCIAL_DOC_PHRASES
+
+
 def test_balloon_flows_reopen_page_after_target_closed(monkeypatch):
     for method_name in (
         "_fetch_maturing_commercial_debt",

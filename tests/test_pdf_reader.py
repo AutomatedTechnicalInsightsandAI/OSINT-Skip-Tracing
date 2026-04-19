@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from utils.pdf_reader import (
     MortgageDocumentInfo,
+    _parse_date_flexible,
+    estimate_principal_from_doc_stamp,
     extract_mortgage_document_info,
     extract_pdf_text,
     parse_mortgage_document_info,
@@ -130,3 +132,24 @@ def test_parse_mortgage_document_info_extracts_reverse_maturity_date_phrase():
     )
 
     assert info.maturity_date == "November 10, 2021"
+
+
+def test_parse_mortgage_document_info_extracts_borrower_name_and_address_anchor():
+    info = parse_mortgage_document_info(
+        """
+        Borrower's name and address is: Amy M. Pintus, a married woman whose post office address is
+        2629 Bigelow Drive, Sarasota, Florida 34239.
+        """
+    )
+
+    assert info.borrower_name == "Amy M. Pintus"
+
+
+def test_parse_date_flexible_handles_day_suffixes():
+    parsed = _parse_date_flexible("10th day of November, 2021")
+    assert parsed is not None
+    assert parsed.strftime("%Y-%m-%d") == "2021-11-10"
+
+
+def test_estimate_principal_from_doc_stamp():
+    assert estimate_principal_from_doc_stamp("980.00") == 280000.0
