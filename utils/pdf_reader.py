@@ -5,12 +5,14 @@ PDF text extraction helpers with OCR fallback for scanned clerk records.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from functools import lru_cache
 from io import BytesIO
 from pathlib import Path
 import re
 from typing import Union
 
+from dateutil import parser as _dp
 from PIL import Image
 
 
@@ -323,22 +325,22 @@ def _normalize_percent(value: str) -> str:
     return f"{match.group(1)}%"
 
 
-def _parse_date_flexible(date_str: str):
+def _parse_date_flexible(date_str: str) -> datetime | None:
+    """Parse OCR date text with fuzzy matching and return a datetime when possible."""
     if not date_str:
         return None
     try:
-        from dateutil import parser as _dp
-
         return _dp.parse(date_str, fuzzy=True)
-    except Exception:
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
 def estimate_principal_from_doc_stamp(doc_stamp_str: str) -> float:
+    """Estimate principal from Florida doc stamp tax using (doc_stamp / 0.35) * 100."""
     try:
         amount = float((doc_stamp_str or "").replace(",", "").replace("$", "").strip())
         if amount <= 0:
             return 0.0
         return round((amount / 0.35) * 100, 2)
-    except (ValueError, ZeroDivisionError):
+    except ValueError:
         return 0.0

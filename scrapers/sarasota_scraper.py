@@ -812,7 +812,7 @@ class SarasotaScraper(BaseScraper):
         record.instrument_number = terms.get("instrument_number", "") or instrument_number
         record.view_image_url = image_url
         record.owner_name = terms.get("borrower_name", "") or record.owner_name
-        record.owner_name = record.owner_name.replace("\n", " ").strip()
+        record.owner_name = (record.owner_name or "").replace("\n", " ").strip()
         record.lender_name = terms.get("lender_name", "")
         record.maturity_date = terms.get("maturity_date", "")
         record.pdf_extraction_method = terms.get("extraction_method", "")
@@ -1099,6 +1099,16 @@ class SarasotaScraper(BaseScraper):
         if len(cleaned_tokens) < 2 or len(cleaned_tokens) > 8:
             return False
         return any(len(token.replace("-", "")) > 1 for token in cleaned_tokens)
+
+    @staticmethod
+    def _is_commercial_borrower_name(borrower_name: str) -> bool:
+        """Return True when borrower name contains common commercial entity tokens."""
+        return bool(
+            re.search(
+                r"\b(LLC|INC|CORP|CORPORATION|TRUST|TRUSTEE|LP|LTD|PARTNERS)\b",
+                (borrower_name or "").upper(),
+            )
+        )
 
     @classmethod
     def _has_balloon_signal(cls, pdf_text: str) -> tuple[bool, str]:
@@ -1890,12 +1900,7 @@ class SarasotaScraper(BaseScraper):
                         note_bits.append(f"Balloon Balance: ${balloon_balance:,.0f}")
                     if record.property_type:
                         note_bits.append(f"Property Type: {record.property_type}")
-                    commercial_borrower = bool(
-                        re.search(
-                            r"\b(LLC|INC|CORP|CORPORATION|TRUST|TRUSTEE|LP|LTD|PARTNERS)\b",
-                            borrower_name.upper(),
-                        )
-                    )
+                    commercial_borrower = self._is_commercial_borrower_name(borrower_name)
                     note_bits.append(
                         f"Commercial Borrower: {'True' if commercial_borrower else 'False'}"
                     )
@@ -2055,12 +2060,7 @@ class SarasotaScraper(BaseScraper):
                         note_bits.append(f"Balloon Balance: ${balloon_balance:,.0f}")
                     note_bits.append(f"Current exemptions: ${record.current_exemptions or '0'}")
                     note_bits.append(f"Interest threshold met: {terms.get('interest_rate', '')}")
-                    commercial_borrower = bool(
-                        re.search(
-                            r"\b(LLC|INC|CORP|CORPORATION|TRUST|TRUSTEE|LP|LTD|PARTNERS)\b",
-                            borrower_name.upper(),
-                        )
-                    )
+                    commercial_borrower = self._is_commercial_borrower_name(borrower_name)
                     note_bits.append(
                         f"Commercial Borrower: {'True' if commercial_borrower else 'False'}"
                     )
