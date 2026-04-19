@@ -1263,8 +1263,9 @@ class SarasotaScraper(BaseScraper):
                     borrower_name = terms.get("borrower_name", "").strip() or row.get("grantee", "")
                     if not borrower_name:
                         continue
+                    borrower_tokens = set(re.findall(r"[A-Z0-9]+", (borrower_name or "").upper()))
                     is_commercial_borrower = any(
-                        kw in (borrower_name or "").upper().split()
+                        kw in borrower_tokens
                         for kw in self.COMMERCIAL_BORROWER_KEYWORDS
                     )
 
@@ -1285,10 +1286,8 @@ class SarasotaScraper(BaseScraper):
                     )
                     record = self._apply_clerk_pdf_terms(record, row, terms)
                     record = self._enrich_record_from_pa_owner_search(record, borrower_name)
-                    record.notes = (
-                        (record.notes or "")
-                        + f" | Commercial Borrower: {is_commercial_borrower}"
-                    ).strip()
+                    prefix = f"{record.notes} | " if record.notes else ""
+                    record.notes = f"{prefix}Commercial Borrower: {is_commercial_borrower}"
                     records.append(record)
 
             page.context.close()

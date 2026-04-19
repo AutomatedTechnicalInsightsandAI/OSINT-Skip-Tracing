@@ -13,6 +13,7 @@ import re
 from typing import Union
 
 from dateutil import parser as dateutil_parser
+from dateutil.parser import ParserError
 from PIL import Image
 
 
@@ -152,7 +153,7 @@ def parse_mortgage_document_info(text: str) -> MortgageDocumentInfo:
 
     maturity_phrase = _search_first(
         [
-            r"due\s+by\s+([A-Z][a-z]+\s+\d{1,2},\s+\d{4})",
+            r"due\s+by\s+((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},\s+\d{4})",
             r"Maturity\s+Date.{0,500}?((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}[,\.]?\s+\d{4})",
         ],
         flattened,
@@ -321,7 +322,7 @@ def _parse_date_flexible(date_str: str) -> datetime | None:
         return None
     try:
         return dateutil_parser.parse(date_str, fuzzy=True)
-    except Exception:
+    except (ParserError, TypeError, ValueError, OverflowError):
         return None
 
 
@@ -330,5 +331,5 @@ def estimate_principal_from_doc_stamp(doc_stamp_str: str) -> float:
     try:
         amount = float((doc_stamp_str or "").replace(",", "").replace("$", "").strip())
         return round((amount / 0.35) * 100, 2)
-    except (ValueError, ZeroDivisionError):
+    except ValueError:
         return 0.0
