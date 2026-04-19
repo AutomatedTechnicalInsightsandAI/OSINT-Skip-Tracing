@@ -225,6 +225,13 @@ def test_extract_balloon_balance_from_sarasota_maturity_language():
     assert scraper._has_balloon_signal(text)[0] is True
 
 
+def test_extract_balloon_balance_from_primary_balance_anchor():
+    scraper = SarasotaScraper(headless=True)
+    text = "THE PRINCIPAL BALANCE DUE UPON MATURITY IS $280,000.00"
+
+    assert scraper._extract_balloon_balance(text) == 280000.0
+
+
 def test_fetch_maturing_commercial_debt_skips_below_min_balloon_balance(monkeypatch):
     scraper = SarasotaScraper(headless=True)
     page = _FakeLoopPage()
@@ -416,7 +423,7 @@ def test_fetch_balloon_balance_leads_uses_3_to_6_month_window_and_populates_bala
         "_extract_mortgage_pdf_terms",
         lambda _pdf: {
             "instrument_number": "2021007957",
-            "borrower_name": "AMY M PINTUS",
+            "borrower_name": "AMY M PINTUS LLC",
             "maturity_date": maturity_date,
             "pdf_text": (
                 "THIS IS A BALLOON MORTGAGE AND THE FINAL PRINCIPAL PAYMENT OR THE "
@@ -431,8 +438,34 @@ def test_fetch_balloon_balance_leads_uses_3_to_6_month_window_and_populates_bala
     assert len(records) == 1
     assert records[0].balloon_balance == "280000"
     assert records[0].instrument_number == "2021007957"
+    assert "Commercial Borrower: True" in records[0].notes
     assert page.goto_calls[0][0].endswith("intrnum=2021007957")
     assert page.context.closed is True
+
+
+def test_apply_clerk_pdf_terms_estimates_principal_from_doc_stamp_and_cleans_newlines():
+    scraper = SarasotaScraper(headless=True)
+    record = PropertyRecord(owner_name="Existing Owner", county="Sarasota")
+
+    enriched = scraper._apply_clerk_pdf_terms(
+        record,
+        {"instrument_number": "2021007957", "image_url": "https://example.com/viewTiff.aspx"},
+        {
+            "borrower_name": "Amy\nPintus",
+            "doc_stamp_mortgage": "980.00",
+            "pdf_text": "No balloon amount present",
+            "property_address": "123 Main\nSt",
+            "mailing_address": "PO Box\n1",
+        },
+    )
+
+    assert enriched.owner_name == "Amy Pintus"
+    assert enriched.property_address == "123 Main St"
+    assert enriched.mailing_address == "PO Box 1"
+    assert enriched.mtg_amt_at_purchase == "280000.00"
+    assert enriched.mtg_amt_source == "Estimated from FL doc stamp ($0.35/$100)"
+    assert "ASSIGNMENT OF RENTS" in scraper.COMMERCIAL_DOC_PHRASES
+    assert "NON-HOMESTEAD" in scraper.COMMERCIAL_DOC_PHRASES
 
 
 def test_balloon_flows_reopen_page_after_target_closed(monkeypatch):
