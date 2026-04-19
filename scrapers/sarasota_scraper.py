@@ -60,6 +60,8 @@ class SarasotaScraper(BaseScraper):
     MATURING_SEARCH_YEARS = (2021, 2020, 2019, 2018, 2017, 2016, 2015)
     MATURING_SCAN_LIMIT_MULTIPLIER = 12
     MATURING_SCAN_MINIMUM = 60
+    BALLOON_MATURITY_MIN_DAYS = 90
+    BALLOON_MATURITY_MAX_DAYS = 183
     TARGETED_BALLOON_WINDOW_DAYS = 183
     TARGETED_MIN_INTEREST_RATE = 8.0
     MIN_BALLOON_BALANCE = 80_000
@@ -225,6 +227,7 @@ class SarasotaScraper(BaseScraper):
     BALLOON_SIGNAL_PHRASES = {
         "BALLOON",
         "BALLOON PAYMENT",
+        "THIS IS A BALLOON MORTGAGE",
         "BALLOON PURCHASE MONEY MORTGAGE",
         "ENTIRE ACCOUNT BALANCE",
         "ENTIRE UNPAID PRINCIPAL BALANCE",
@@ -806,6 +809,9 @@ class SarasotaScraper(BaseScraper):
         record.lender_name = terms.get("lender_name", "")
         record.maturity_date = terms.get("maturity_date", "")
         record.pdf_extraction_method = terms.get("extraction_method", "")
+        balloon_balance = self._extract_balloon_balance(terms.get("pdf_text", ""))
+        if balloon_balance > 0:
+            record.balloon_balance = str(int(round(balloon_balance)))
 
         credit_limit = terms.get("credit_limit", "")
         if credit_limit:
@@ -821,6 +827,8 @@ class SarasotaScraper(BaseScraper):
             extra_notes.append(f"Interest Rate: {terms['interest_rate']}")
         if record.maturity_date:
             extra_notes.append(f"Maturity Date: {record.maturity_date}")
+        if balloon_balance > 0:
+            extra_notes.append(f"Balloon Balance: ${balloon_balance:,.0f}")
         if terms.get("doc_stamp_mortgage"):
             extra_notes.append(f"Doc Stamp: ${terms['doc_stamp_mortgage']}")
         if terms.get("intangible_tax"):
@@ -1095,17 +1103,160 @@ class SarasotaScraper(BaseScraper):
         Returns 0.0 if not found.
         """
         upper = " ".join((pdf_text or "").upper().split())
-        match = re.search(
-            r"(?:PRINCIPAL BALANCE DUE UPON MATURITY|FINAL PRINCIPAL PAYMENT)[^$\d]{0,60}"
-            r"\$?([\d,]+(?:\.\d{1,2})?)",
-            upper,
-        )
-        if match:
+        patterns = [
+            r"THIS\s+IS\s+A\s+BALLOON\s+MORTGAGE.{0,200}?"
+            r"FINAL\s+PRINCIPAL\s+PAYMENT\s+OR\s+THE\s+PRINCIPAL\s+BALANCE\s+DUE\s+UPON\s+MATURITY\s+IS[^$\d]{0,40}"
+            r"\$?\s*([\d,]+(?:\.\d{1,2})?)",
+            r"FINAL\s+PRINCIPAL\s+PAYMENT\s+OR\s+THE\s+PRINCIPAL\s+BALANCE\s+DUE\s+UPON\s+MATURITY\s+IS[^$\d]{0,40}"
+            r"\$?\s*([\d,]+(?:\.\d{1,2})?)",
+            r"PRINCIPAL\s+BALANCE\s+DUE\s+UPON\s+MATURITY\s+IS[^$\d]{0,40}"
+            r"\$?\s*([\d,]+(?:\.\d{1,2})?)",
+            r"FINAL\s+PRINCIPAL\s+PAYMENT[^$\d]{0,60}\$?\s*([\d,]+(?:\.\d{1,2})?)",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, upper)
+            if not match:
+                continue
             try:
                 return float(match.group(1).replace(",", ""))
             except ValueError:
-                pass
+                continue
         return 0.0
+
+    @staticmethod
+    def _balloon_maturity_window() -> tuple[datetime.date, datetime.date]:
+        today = datetime.now().date()
+        return (
+            today + timedelta(days=SarasotaScraper.BALLOON_MATURITY_MIN_DAYS),
+            today + timedelta(days=SarasotaScraper.BALLOON_MATURITY_MAX_DAYS),
+        )
+
+    def _fetch_balloon_balance_leads(self, max_results: int) -> List[PropertyRecord]:
+        """Primary Sarasota balloon pipeline: OCR-confirmed balloon balance + 3-6 month maturity."""
+        records: List[PropertyRecord] = []
+        seen_instruments: set[str] = set()
+        scan_limit = max(
+            max_results * self.MATURING_SCAN_LIMIT_MULTIPLIER,
+            self.MATURING_SCAN_MINIMUM,
+        )
+        scanned = 0
+        maturity_min, maturity_cutoff = self._balloon_maturity_window()
+
+        try:
+            page = self.new_page()
+
+            for year in self.MATURING_SEARCH_YEARS:
+                if len(records) >= max_results or scanned >= scan_limit:
+                    break
+
+                try:
+                    self._search_official_records(
+                        page,
+                        "MORTGAGE",
+                        f"01/01/{year}",
+                        f"12/31/{year}",
+                    )
+                    rows = self._parse_results(page)
+                except Exception as exc:
+                    if self._is_target_closed_error(exc):
+                        logger.warning(
+                            "Sarasota balloon balance: page closed mid-search for year %d, reopening",
+                            year,
+                        )
+                        page = self._get_fresh_page(page)
+                        try:
+                            self._search_official_records(
+                                page,
+                                "MORTGAGE",
+                                f"01/01/{year}",
+                                f"12/31/{year}",
+                            )
+                            rows = self._parse_results(page)
+                        except Exception as retry_exc:
+                            logger.warning(
+                                "Sarasota balloon balance: retry failed for year %d: %s",
+                                year,
+                                repr(retry_exc),
+                            )
+                            continue
+                    else:
+                        raise
+
+                for row in rows:
+                    if len(records) >= max_results or scanned >= scan_limit:
+                        break
+
+                    instrument_number = row.get("instrument_number", "").strip()
+                    if not instrument_number or instrument_number in seen_instruments:
+                        continue
+                    seen_instruments.add(instrument_number)
+
+                    image_url = row.get("image_url", "").strip()
+                    if image_url:
+                        try:
+                            page.goto(image_url, wait_until="load", timeout=20_000)
+                        except Exception as exc:
+                            logger.debug(
+                                "Sarasota balloon balance: view page open failed for %s: %s",
+                                instrument_number,
+                                repr(exc),
+                            )
+
+                    pdf_bytes = self._download_clerk_pdf(
+                        image_url=image_url,
+                        instrument_number=instrument_number,
+                    )
+                    if not pdf_bytes:
+                        continue
+
+                    scanned += 1
+                    terms = self._extract_mortgage_pdf_terms(pdf_bytes)
+                    has_balloon_signal, _ = self._has_balloon_signal(terms.get("pdf_text", ""))
+                    if not has_balloon_signal:
+                        continue
+                    balloon_balance = self._extract_balloon_balance(terms.get("pdf_text", ""))
+                    if balloon_balance > 0 and balloon_balance < self.MIN_BALLOON_BALANCE:
+                        continue
+                    maturity_dt = parse_record_date(terms.get("maturity_date", ""))
+                    if not maturity_dt:
+                        continue
+                    maturity_date = maturity_dt.date()
+                    if not (maturity_min <= maturity_date <= maturity_cutoff):
+                        continue
+
+                    borrower_name = terms.get("borrower_name", "").strip() or row.get("grantee", "")
+                    if not borrower_name:
+                        continue
+
+                    record = PropertyRecord(
+                        owner_name=borrower_name,
+                        last_sale_date=row.get("rec_date", ""),
+                        estimated_interest_rate=estimate_interest_rate(row.get("rec_date", "")),
+                        county=self.county_name,
+                        deed_type=row.get("instrument_type", ""),
+                        lead_type=LeadType.BALLOON_PROSPECTS.value,
+                        instrument_number=terms.get("instrument_number", "").strip()
+                        or instrument_number,
+                        maturity_date=terms.get("maturity_date", ""),
+                        balloon_balance=(
+                            str(int(round(balloon_balance))) if balloon_balance > 0 else ""
+                        ),
+                        lead_source="Sarasota Official Records + OCR",
+                    )
+                    record = self._apply_clerk_pdf_terms(record, row, terms)
+                    record = self._enrich_record_from_pa_owner_search(record, borrower_name)
+                    records.append(record)
+
+            page.context.close()
+        except Exception as exc:
+            logger.error("Sarasota balloon balance scrape failed: %s", repr(exc))
+
+        logger.info(
+            "Sarasota balloon balance leads found: %d (scanned %d PDFs)",
+            len(records),
+            scanned,
+        )
+        return records
 
     def _fetch_cashout_refi(self, max_results: int) -> List[PropertyRecord]:
         """
@@ -1618,8 +1769,7 @@ class SarasotaScraper(BaseScraper):
             self.MATURING_SCAN_MINIMUM,
         )
         scanned = 0
-        today = datetime.now().date()
-        maturity_cutoff = today + timedelta(days=365)
+        maturity_min, maturity_cutoff = self._balloon_maturity_window()
 
         try:
             page = self.new_page()
@@ -1686,7 +1836,7 @@ class SarasotaScraper(BaseScraper):
                     if not maturity_dt:
                         continue
                     maturity_date = maturity_dt.date()
-                    if maturity_date < today or maturity_date > maturity_cutoff:
+                    if not (maturity_min <= maturity_date <= maturity_cutoff):
                         continue
 
                     borrower_name = terms.get("borrower_name", "").strip() or row.get("grantee", "")
@@ -1706,6 +1856,8 @@ class SarasotaScraper(BaseScraper):
                     )
                     record = self._apply_clerk_pdf_terms(record, row, terms)
                     record = self._enrich_record_from_pa_owner_search(record, borrower_name)
+                    if balloon_balance > 0:
+                        record.balloon_balance = str(int(round(balloon_balance)))
 
                     is_commercial, commercial_reason = self._is_likely_commercial_mortgage(
                         borrower_name=record.owner_name,
@@ -1751,8 +1903,7 @@ class SarasotaScraper(BaseScraper):
             self.MATURING_SCAN_MINIMUM,
         )
         scanned = 0
-        today = datetime.now().date()
-        maturity_cutoff = today + timedelta(days=self.TARGETED_BALLOON_WINDOW_DAYS)
+        maturity_min, maturity_cutoff = self._balloon_maturity_window()
 
         try:
             page = self.new_page()
@@ -1816,7 +1967,7 @@ class SarasotaScraper(BaseScraper):
                     if not maturity_dt:
                         continue
                     maturity_date = maturity_dt.date()
-                    if maturity_date < today or maturity_date > maturity_cutoff:
+                    if not (maturity_min <= maturity_date <= maturity_cutoff):
                         continue
 
                     borrower_name = terms.get("borrower_name", "").strip() or row.get("grantee", "")
@@ -1853,6 +2004,8 @@ class SarasotaScraper(BaseScraper):
                     )
                     record = self._apply_clerk_pdf_terms(record, row, terms)
                     record = self._enrich_record_from_pa_owner_search(record, borrower_name)
+                    if balloon_balance > 0:
+                        record.balloon_balance = str(int(round(balloon_balance)))
 
                     if not record.property_type or not self._looks_commercial_property_type(
                         record.property_type
@@ -1894,12 +2047,13 @@ class SarasotaScraper(BaseScraper):
         return records
 
     def _fetch_balloon_prospects(self, max_results: int) -> List[PropertyRecord]:
-        """Return the union of both Sarasota balloon prospect workflows."""
+        """Return the union of Sarasota balloon workflows."""
         merged: List[PropertyRecord] = []
         seen: Set[tuple[str, ...]] = set()
 
         for record in (
-            self._fetch_maturing_commercial_debt(max_results)
+            self._fetch_balloon_balance_leads(max_results)
+            + self._fetch_maturing_commercial_debt(max_results)
             + self._fetch_sarasota_personal_commercial_balloon_clients(max_results)
         ):
             instrument = (record.instrument_number or "").strip()

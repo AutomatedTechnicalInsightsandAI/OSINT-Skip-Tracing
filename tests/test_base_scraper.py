@@ -55,6 +55,7 @@ def test_property_record_to_dict_keys():
         "Just Value",
         "Assessed Value",
         "Mtg Amt At Purchase",
+        "Balloon Balance",
         "Absentee Owner",
     ]
     for col in required:

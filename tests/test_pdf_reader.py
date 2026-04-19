@@ -120,3 +120,13 @@ def test_extract_mortgage_document_info_uses_pdf_text_path(monkeypatch):
     assert info.extraction_method == "ocr"
     assert info.instrument_number == "2026047868"
     assert info.credit_limit == "250000.00"
+
+
+def test_parse_mortgage_document_info_extracts_reverse_maturity_date_phrase():
+    info = parse_mortgage_document_info(
+        """
+        ... to be due by November 10, 2021 ("Maturity Date") and payable in full.
+        """
+    )
+
+    assert info.maturity_date == "November 10, 2021"
