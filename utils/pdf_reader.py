@@ -90,6 +90,38 @@ def extract_mortgage_document_info(
     return info
 
 
+def is_balloon_mortgage_first_page(pdf_bytes: bytes) -> bool:
+    """
+    Return True if page 1 of the PDF contains a balloon mortgage signal.
+    Only reads the first page for speed — call this before full extraction.
+    """
+    if not pdf_bytes:
+        return False
+
+    try:
+        text = _extract_text_with_pypdf(pdf_bytes, max_pages=1)
+    except Exception:
+        text = ""
+
+    if not _looks_like_useful_text(text):
+        try:
+            text = _extract_text_with_ocr(pdf_bytes, max_pages=1)
+        except Exception:
+            text = ""
+
+    upper = " ".join(text.upper().split())
+    balloon_signals = [
+        "BALLOON MORTGAGE",
+        "BALLOON PAYMENT",
+        "PRINCIPAL BALANCE DUE UPON MATURITY",
+        "BALANCE DUE UPON MATURITY",
+        "FINAL PRINCIPAL PAYMENT",
+        "ENTIRE PRINCIPAL BALANCE",
+        "ENTIRE UNPAID PRINCIPAL BALANCE",
+    ]
+    return any(signal in upper for signal in balloon_signals)
+
+
 def parse_mortgage_document_info(text: str) -> MortgageDocumentInfo:
     """Parse key mortgage fields from extracted document text."""
     info = MortgageDocumentInfo()

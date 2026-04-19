@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+import pytest
+
 from scrapers.base_scraper import LeadType, PropertyRecord
 from scrapers.sarasota_scraper import SarasotaScraper
 
@@ -270,6 +272,7 @@ def test_fetch_maturing_commercial_debt_skips_below_min_balloon_balance(monkeypa
         ],
     )
     monkeypatch.setattr(scraper, "_download_clerk_pdf", lambda **_kwargs: b"%PDF")
+    monkeypatch.setattr("scrapers.sarasota_scraper.is_balloon_mortgage_first_page", lambda _pdf: True)
     monkeypatch.setattr(
         scraper,
         "_extract_mortgage_pdf_terms",
@@ -317,6 +320,7 @@ def test_fetch_personal_commercial_balloon_client_adds_balloon_balance_note(monk
         ],
     )
     monkeypatch.setattr(scraper, "_download_clerk_pdf", lambda **_kwargs: b"%PDF")
+    monkeypatch.setattr("scrapers.sarasota_scraper.is_balloon_mortgage_first_page", lambda _pdf: True)
     monkeypatch.setattr(
         scraper,
         "_extract_mortgage_pdf_terms",
@@ -413,6 +417,48 @@ class _FakeLoopPage:
         self.goto_calls.append((url, kwargs))
 
 
+@pytest.mark.parametrize(
+    "method_name",
+    [
+        "_fetch_balloon_balance_leads",
+        "_fetch_maturing_commercial_debt",
+        "_fetch_sarasota_personal_commercial_balloon_clients",
+    ],
+)
+def test_balloon_flows_skip_full_extraction_when_first_page_has_no_signal(monkeypatch, method_name):
+    scraper = SarasotaScraper(headless=True)
+    page = _FakeLoopPage()
+
+    monkeypatch.setattr(scraper, "MATURING_SEARCH_YEARS", (2021,))
+    monkeypatch.setattr(scraper, "new_page", lambda: page)
+    monkeypatch.setattr(scraper, "_search_official_records", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        scraper,
+        "_parse_results",
+        lambda _page: [
+            {
+                "instrument_number": "2021000009",
+                "image_url": "https://secure.sarasotaclerk.com/viewTiff.aspx?intrnum=2021000009",
+                "instrument_type": "MORTGAGE",
+                "rec_date": "04/01/2021",
+                "grantee": "SUNCOAST PARTNERS LLC",
+            }
+        ],
+    )
+    monkeypatch.setattr(scraper, "_download_clerk_pdf", lambda **_kwargs: b"%PDF")
+    monkeypatch.setattr("scrapers.sarasota_scraper.is_balloon_mortgage_first_page", lambda _pdf: False)
+    monkeypatch.setattr(
+        scraper,
+        "_extract_mortgage_pdf_terms",
+        lambda _pdf: (_ for _ in ()).throw(AssertionError("full extraction should be skipped")),
+    )
+
+    records = getattr(scraper, method_name)(max_results=5)
+
+    assert records == []
+    assert page.context.closed is True
+
+
 def test_fetch_balloon_balance_leads_uses_3_to_6_month_window_and_populates_balance(monkeypatch):
     scraper = SarasotaScraper(headless=True)
     page = _FakeLoopPage()
@@ -435,6 +481,7 @@ def test_fetch_balloon_balance_leads_uses_3_to_6_month_window_and_populates_bala
         ],
     )
     monkeypatch.setattr(scraper, "_download_clerk_pdf", lambda **_kwargs: b"%PDF")
+    monkeypatch.setattr("scrapers.sarasota_scraper.is_balloon_mortgage_first_page", lambda _pdf: True)
     monkeypatch.setattr(
         scraper,
         "_extract_mortgage_pdf_terms",
@@ -516,6 +563,7 @@ def test_fetch_maturing_commercial_debt_adds_commercial_borrower_flag(monkeypatc
         ],
     )
     monkeypatch.setattr(scraper, "_download_clerk_pdf", lambda **_kwargs: b"%PDF")
+    monkeypatch.setattr("scrapers.sarasota_scraper.is_balloon_mortgage_first_page", lambda _pdf: True)
     monkeypatch.setattr(
         scraper,
         "_extract_mortgage_pdf_terms",

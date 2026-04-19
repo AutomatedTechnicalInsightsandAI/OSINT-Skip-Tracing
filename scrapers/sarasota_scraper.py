@@ -34,6 +34,7 @@ from utils.pdf_reader import (
     _parse_date_flexible,
     estimate_principal_from_doc_stamp,
     extract_mortgage_document_info,
+    is_balloon_mortgage_first_page,
 )
 
 logger = logging.getLogger(__name__)
@@ -1236,6 +1237,18 @@ class SarasotaScraper(BaseScraper):
                     if not pdf_bytes:
                         continue
 
+                    if is_balloon_mortgage_first_page(pdf_bytes):
+                        logger.info(
+                            "Sarasota balloon: page-1 signal confirmed for instrument %s, running full extraction",
+                            instrument_number,
+                        )
+                    else:
+                        logger.debug(
+                            "Sarasota balloon: no balloon signal on page 1 for instrument %s, skipping",
+                            instrument_number,
+                        )
+                        continue
+
                     scanned += 1
                     terms = self._extract_mortgage_pdf_terms(pdf_bytes)
                     has_balloon_signal, _ = self._has_balloon_signal(terms.get("pdf_text", ""))
@@ -1854,6 +1867,18 @@ class SarasotaScraper(BaseScraper):
                     if not pdf_bytes:
                         continue
 
+                    if is_balloon_mortgage_first_page(pdf_bytes):
+                        logger.info(
+                            "Sarasota balloon: page-1 signal confirmed for instrument %s, running full extraction",
+                            instrument_number,
+                        )
+                    else:
+                        logger.debug(
+                            "Sarasota balloon: no balloon signal on page 1 for instrument %s, skipping",
+                            instrument_number,
+                        )
+                        continue
+
                     scanned += 1
                     terms = self._extract_mortgage_pdf_terms(pdf_bytes)
                     balloon_balance = self._extract_balloon_balance(terms.get("pdf_text", ""))
@@ -1990,6 +2015,18 @@ class SarasotaScraper(BaseScraper):
                         instrument_number=instrument_number,
                     )
                     if not pdf_bytes:
+                        continue
+
+                    if is_balloon_mortgage_first_page(pdf_bytes):
+                        logger.info(
+                            "Sarasota balloon: page-1 signal confirmed for instrument %s, running full extraction",
+                            instrument_number,
+                        )
+                    else:
+                        logger.debug(
+                            "Sarasota balloon: no balloon signal on page 1 for instrument %s, skipping",
+                            instrument_number,
+                        )
                         continue
 
                     scanned += 1
