@@ -10,6 +10,7 @@ from utils.pdf_reader import (
     estimate_principal_from_doc_stamp,
     extract_mortgage_document_info,
     extract_pdf_text,
+    is_balloon_mortgage_first_page,
     parse_mortgage_document_info,
 )
 
@@ -169,3 +170,43 @@ def test_parse_date_flexible_accepts_ocr_style_date():
 def test_estimate_principal_from_doc_stamp_uses_florida_formula():
     assert estimate_principal_from_doc_stamp("$980.00") == 280000.0
     assert estimate_principal_from_doc_stamp("") == 0.0
+
+
+def test_is_balloon_mortgage_first_page_uses_text_layer_first(monkeypatch):
+    monkeypatch.setattr(
+        "utils.pdf_reader._extract_text_with_pypdf",
+        lambda *_args, **_kwargs: "THIS IS A BALLOON MORTGAGE",
+    )
+    monkeypatch.setattr(
+        "utils.pdf_reader._extract_text_with_ocr",
+        lambda *_args, **_kwargs: "",
+    )
+
+    assert is_balloon_mortgage_first_page(b"%PDF") is True
+
+
+def test_is_balloon_mortgage_first_page_falls_back_to_ocr(monkeypatch):
+    monkeypatch.setattr(
+        "utils.pdf_reader._extract_text_with_pypdf",
+        lambda *_args, **_kwargs: "",
+    )
+    monkeypatch.setattr(
+        "utils.pdf_reader._extract_text_with_ocr",
+        lambda *_args, **_kwargs: "principal balance due upon maturity is $180,000.00",
+    )
+
+    assert is_balloon_mortgage_first_page(b"%PDF") is True
+
+
+def test_is_balloon_mortgage_first_page_returns_false_for_empty_or_invalid_pdf(monkeypatch):
+    monkeypatch.setattr(
+        "utils.pdf_reader._extract_text_with_pypdf",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("bad pdf")),
+    )
+    monkeypatch.setattr(
+        "utils.pdf_reader._extract_text_with_ocr",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("ocr failed")),
+    )
+
+    assert is_balloon_mortgage_first_page(b"") is False
+    assert is_balloon_mortgage_first_page(b"%PDF-bad") is False
