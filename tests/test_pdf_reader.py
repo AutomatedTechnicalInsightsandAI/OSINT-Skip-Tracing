@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from utils.pdf_reader import (
     MortgageDocumentInfo,
+    _parse_date_flexible,
+    estimate_principal_from_doc_stamp,
     extract_mortgage_document_info,
     extract_pdf_text,
     parse_mortgage_document_info,
@@ -130,3 +132,40 @@ def test_parse_mortgage_document_info_extracts_reverse_maturity_date_phrase():
     )
 
     assert info.maturity_date == "November 10, 2021"
+
+
+def test_parse_mortgage_document_info_extracts_due_by_without_maturity_label():
+    info = parse_mortgage_document_info(
+        """
+        The entire principal balance shall be due by November 10, 2026 and payable in full.
+        """
+    )
+
+    assert info.maturity_date == "November 10, 2026"
+
+
+def test_parse_mortgage_document_info_extracts_balloon_balance_and_borrower_name_anchor():
+    info = parse_mortgage_document_info(
+        """
+        Borrower's name and address is:
+        SUNCOAST OFFICE PARTNERS LLC, a single member limited liability company
+        THIS IS A BALLOON MORTGAGE. THE PRINCIPAL BALANCE DUE UPON MATURITY IS $280,000.00.
+        """
+    )
+
+    assert info.borrower_name == "SUNCOAST OFFICE PARTNERS LLC"
+    assert info.balloon_balance == "280000.00"
+
+
+def test_parse_date_flexible_accepts_ocr_style_date():
+    parsed = _parse_date_flexible("to be due by 10th day of November, 2026 (Maturity Date)")
+
+    assert parsed is not None
+    assert parsed.year == 2026
+    assert parsed.month == 11
+    assert parsed.day == 10
+
+
+def test_estimate_principal_from_doc_stamp_uses_florida_formula():
+    assert estimate_principal_from_doc_stamp("$980.00") == 280000.0
+    assert estimate_principal_from_doc_stamp("") == 0.0
