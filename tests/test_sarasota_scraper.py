@@ -165,6 +165,18 @@ def test_fetch_records_routes_balloon_prospects_union(monkeypatch):
     scraper = SarasotaScraper(headless=True)
     monkeypatch.setattr(
         scraper,
+        "_fetch_balloon_balance_leads",
+        lambda max_results: [
+            PropertyRecord(
+                owner_name="AMY M PINTUS",
+                county="Sarasota",
+                lead_type=LeadType.BALLOON_PROSPECTS.value,
+                instrument_number="2021007957",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        scraper,
         "_fetch_maturing_commercial_debt",
         lambda max_results: [
             PropertyRecord(
@@ -188,9 +200,10 @@ def test_fetch_records_routes_balloon_prospects_union(monkeypatch):
 
     records = scraper.fetch_records(LeadType.BALLOON_PROSPECTS, max_results=5)
 
-    assert len(records) == 2
+    assert len(records) == 3
     assert records[0].lead_type == LeadType.BALLOON_PROSPECTS.value
     assert records[1].lead_type == LeadType.BALLOON_PROSPECTS.value
+    assert records[2].lead_type == LeadType.BALLOON_PROSPECTS.value
 
 
 def test_is_likely_personal_name_rejects_bank():
@@ -205,10 +218,10 @@ def test_extract_balloon_balance_from_sarasota_maturity_language():
     text = (
         "BALLOON PURCHASE MONEY MORTGAGE\n"
         "THIS IS A BALLOON MORTGAGE AND THE FINAL PRINCIPAL PAYMENT OR THE "
-        "PRINCIPAL BALANCE DUE UPON MATURITY IS $180,000.00, TOGETHER WITH ACCRUED INTEREST."
+        "PRINCIPAL BALANCE DUE UPON MATURITY IS $280,000.00, TOGETHER WITH ACCRUED INTEREST."
     )
 
-    assert scraper._extract_balloon_balance(text) == 180000.0
+    assert scraper._extract_balloon_balance(text) == 280000.0
     assert scraper._has_balloon_signal(text)[0] is True
 
 
@@ -262,7 +275,7 @@ def test_fetch_maturing_commercial_debt_skips_below_min_balloon_balance(monkeypa
 def test_fetch_personal_commercial_balloon_client_adds_balloon_balance_note(monkeypatch):
     scraper = SarasotaScraper(headless=True)
     page = _FakeLoopPage()
-    maturity_date = (datetime.now() + timedelta(days=30)).strftime("%m/%d/%Y")
+    maturity_date = (datetime.now() + timedelta(days=120)).strftime("%m/%d/%Y")
 
     monkeypatch.setattr(scraper, "MATURING_SEARCH_YEARS", (2021,))
     monkeypatch.setattr(scraper, "new_page", lambda: page)
@@ -370,6 +383,56 @@ class _FakeContext:
 class _FakeLoopPage:
     def __init__(self):
         self.context = _FakeContext()
+        self.goto_calls = []
+
+    def goto(self, url: str, **kwargs):
+        self.goto_calls.append((url, kwargs))
+
+
+def test_fetch_balloon_balance_leads_uses_3_to_6_month_window_and_populates_balance(monkeypatch):
+    scraper = SarasotaScraper(headless=True)
+    page = _FakeLoopPage()
+    maturity_date = (datetime.now() + timedelta(days=120)).strftime("%m/%d/%Y")
+
+    monkeypatch.setattr(scraper, "MATURING_SEARCH_YEARS", (2021,))
+    monkeypatch.setattr(scraper, "new_page", lambda: page)
+    monkeypatch.setattr(scraper, "_search_official_records", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        scraper,
+        "_parse_results",
+        lambda _page: [
+            {
+                "instrument_number": "2021007957",
+                "image_url": "https://secure.sarasotaclerk.com/viewTiff.aspx?intrnum=2021007957",
+                "instrument_type": "MORTGAGE",
+                "rec_date": "04/01/2021",
+                "grantee": "AMY M PINTUS",
+            }
+        ],
+    )
+    monkeypatch.setattr(scraper, "_download_clerk_pdf", lambda **_kwargs: b"%PDF")
+    monkeypatch.setattr(
+        scraper,
+        "_extract_mortgage_pdf_terms",
+        lambda _pdf: {
+            "instrument_number": "2021007957",
+            "borrower_name": "AMY M PINTUS",
+            "maturity_date": maturity_date,
+            "pdf_text": (
+                "THIS IS A BALLOON MORTGAGE AND THE FINAL PRINCIPAL PAYMENT OR THE "
+                "PRINCIPAL BALANCE DUE UPON MATURITY IS $280,000.00"
+            ),
+        },
+    )
+    monkeypatch.setattr(scraper, "_enrich_record_from_pa_owner_search", lambda record, _name: record)
+
+    records = scraper._fetch_balloon_balance_leads(max_results=5)
+
+    assert len(records) == 1
+    assert records[0].balloon_balance == "280000"
+    assert records[0].instrument_number == "2021007957"
+    assert page.goto_calls[0][0].endswith("intrnum=2021007957")
+    assert page.context.closed is True
 
 
 def test_balloon_flows_reopen_page_after_target_closed(monkeypatch):

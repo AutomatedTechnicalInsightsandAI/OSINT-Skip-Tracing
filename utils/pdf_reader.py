@@ -153,6 +153,7 @@ def parse_mortgage_document_info(text: str) -> MortgageDocumentInfo:
                 r"Maturity\s+Date.{0,500}?((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}[,\.]?\s+\d{4})",
                 r"Maturity\s+Date.*?Instrument,\s+is\s+due\s+on\s+(.+?)\s+(?:as\s|Borrower|The\s+Note|$)",
                 r"Maturity\s+Date.*?due\s+on\s+(.+?)\s+(?:as\s|Borrower|The\s+Note|$)",
+                r"due\s+by\s+((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2}[,\.]?\s+\d{4})\s*\(?['\"]?Maturity\s+Date",
             ],
             flattened,
             flags=re.IGNORECASE | re.DOTALL,

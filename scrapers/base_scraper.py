@@ -57,6 +57,7 @@ class PropertyRecord:
     mtg_amt_source: str = ""
     lender_name: str = ""
     maturity_date: str = ""
+    balloon_balance: str = ""
     pdf_extraction_method: str = ""
     view_image_url: str = ""
     year_built: str = ""
@@ -89,6 +90,7 @@ class PropertyRecord:
             "Mtg Amt Source": self.mtg_amt_source,
             "Lender Name": self.lender_name,
             "Maturity Date": self.maturity_date,
+            "Balloon Balance": self.balloon_balance,
             "PDF Extraction Method": self.pdf_extraction_method,
             "View Image URL": self.view_image_url,
             "Year Built": self.year_built,
