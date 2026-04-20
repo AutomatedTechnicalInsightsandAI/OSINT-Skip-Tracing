@@ -12,3 +12,9 @@ def test_trust_refi_help_text_mentions_trust_signals():
     help_text = LEAD_TYPE_HELP[LeadType.TRUST_REFI]
     assert "trust" in help_text.lower()
     assert "trustee" in help_text.lower()
+
+
+def test_balloon_help_text_mentions_2026_2027_and_scan_target():
+    help_text = LEAD_TYPE_HELP[LeadType.BALLOON_PROSPECTS]
+    assert "2026 or 2027" in help_text
+    assert "1,000 PDFs per run" in help_text
