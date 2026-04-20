@@ -1267,8 +1267,8 @@ class SarasotaScraper(BaseScraper):
                     scanned += 1
 
                     has_balloon_on_first_page = is_balloon_mortgage_first_page(pdf_bytes)
-                    first_page = extract_pdf_text(pdf_bytes, max_pages=1, force_ocr=False)
-                    compact_first_page = " ".join((first_page.text or "").split())
+                    first_page_extraction = extract_pdf_text(pdf_bytes, max_pages=1, force_ocr=False)
+                    compact_first_page = " ".join((first_page_extraction.text or "").split())
                     first_page_empty = (
                         not compact_first_page
                         or len(compact_first_page) < 20

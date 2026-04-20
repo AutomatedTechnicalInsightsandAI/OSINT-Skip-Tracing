@@ -82,10 +82,7 @@ class DataProcessor:
             return pd.DataFrame(columns=self._column_order())
 
         df = pd.DataFrame([r.to_dict() for r in records])
-        if "Sales Strategy" in df.columns:
-            df["Sales Strategy"] = df.apply(classify_lead, axis=1)
-        else:
-            df["Sales Strategy"] = df.apply(classify_lead, axis=1)
+        df["Sales Strategy"] = df.apply(classify_lead, axis=1)
 
         if self.enable_skip_tracing:
             df = self._attach_emails(df)

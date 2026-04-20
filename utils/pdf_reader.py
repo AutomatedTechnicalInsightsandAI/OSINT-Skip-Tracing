@@ -4,7 +4,7 @@ PDF text extraction helpers with OCR fallback for scanned clerk records.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
 from io import BytesIO
@@ -60,13 +60,9 @@ class ModAgreementInfo:
     credit_limit: str = ""
     balloon_balance: float = 0.0
     has_balloon_signal: bool = False
-    trust_keywords_found: list[str] = None
+    trust_keywords_found: list[str] = field(default_factory=list)
     extraction_method: str = "none"
     extracted_text: str = ""
-
-    def __post_init__(self):
-        if self.trust_keywords_found is None:
-            self.trust_keywords_found = []
 
 
 def extract_pdf_text(
