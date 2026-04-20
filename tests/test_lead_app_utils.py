@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from pathlib import Path
+from tempfile import gettempdir
 
 import pandas as pd
 
@@ -126,12 +127,11 @@ def test_run_scrapers_persists_balloon_partial_results_and_saves_incrementally(m
         "COUNTY_SCRAPERS",
         {"Sarasota": _FakeScraperA, "Broward": _FakeScraperB},
     )
-    monkeypatch.setattr(
-        lead_app_utils,
-        "save_results_csv",
-        lambda df, _lead_type, label: save_calls.append((len(df), label))
-        or Path(f"/tmp/{label}.csv"),
-    )
+    def _fake_save_results_csv(df, _lead_type, label):
+        save_calls.append((len(df), label))
+        return Path(gettempdir()) / f"{label}.csv"
+
+    monkeypatch.setattr(lead_app_utils, "save_results_csv", _fake_save_results_csv)
 
     df = lead_app_utils.run_scrapers(
         {
@@ -146,9 +146,7 @@ def test_run_scrapers_persists_balloon_partial_results_and_saves_incrementally(m
     assert len(df) == 2
     assert len(st.session_state["balloon_partial_df"]) == 2
     assert len(st.session_state["balloon_results_df"]) == 2
-    assert st.session_state["balloon_saved_csv_path"].endswith(
-        "/tmp/balloon_balance_partial.csv"
-    )
+    assert st.session_state["balloon_saved_csv_path"].endswith("balloon_balance_partial.csv")
     assert save_calls == [
         (1, "balloon_balance_partial"),
         (2, "balloon_balance_partial"),

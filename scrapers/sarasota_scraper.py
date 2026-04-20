@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import List, Set
 from urllib.parse import urljoin, urlparse, parse_qs
 import requests
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from scrapers.base_scraper import (
     BaseScraper,
@@ -752,8 +753,11 @@ class SarasotaScraper(BaseScraper):
             img_page.goto(image_url, wait_until="load", timeout=20_000)
             try:
                 img_page.wait_for_selector("img, embed, object, iframe", timeout=5_000)
-            except Exception:
-                pass
+            except PlaywrightTimeoutError:
+                logger.debug(
+                    "Sarasota balloon: viewer element wait timed out for %s",
+                    instrument_number,
+                )
             img_page.wait_for_timeout(3_000)
         except Exception as exc:
             logger.debug(

@@ -107,7 +107,7 @@ def get_results_so_far_df(results_key: str, partial_key: str) -> pd.DataFrame:
     partial_df = st.session_state.get(partial_key, pd.DataFrame())
     if isinstance(results_df, pd.DataFrame) and not results_df.empty:
         return results_df
-    if isinstance(partial_df, pd.DataFrame):
+    if isinstance(partial_df, pd.DataFrame) and not partial_df.empty:
         return partial_df
     return pd.DataFrame()
 
@@ -125,10 +125,10 @@ def render_download_leads_so_far(
         return
 
     lead_count = len(df.index)
-    c_count, c_btn = st.columns([2, 3])
-    with c_count:
+    count_column, button_column = st.columns([2, 3])
+    with count_column:
         st.caption(f"{lead_count} leads found so far")
-    with c_btn:
+    with button_column:
         st.download_button(
             label="⬇️ Download Leads So Far",
             data=CSVExporter.to_bytes(df),
@@ -138,6 +138,20 @@ def render_download_leads_so_far(
             width="content",
             key=widget_key,
         )
+
+
+def _records_to_dataframe(records: list) -> pd.DataFrame:
+    rows = []
+    for record in records:
+        if isinstance(record, dict):
+            rows.append(record)
+        elif hasattr(record, "to_dict"):
+            rows.append(record.to_dict())
+        elif hasattr(record, "__dict__"):
+            rows.append(dict(record.__dict__))
+        else:
+            logger.warning("Skipping unhandled record type in partial results: %s", type(record))
+    return pd.DataFrame(rows)
 
 
 def run_scrapers(config: dict) -> pd.DataFrame:
@@ -160,10 +174,6 @@ def run_scrapers(config: dict) -> pd.DataFrame:
     all_records = []
     progress_bar = st.progress(0, text="Initializing scrapers...")
     status = st.status("Running scrapers...", expanded=True)
-    processor = DataProcessor(
-        enable_skip_tracing=config["skip_tracing"],
-        max_skip_trace_per_batch=20,
-    )
 
     for idx, county_name in enumerate(counties):
         scraper_cls = COUNTY_SCRAPERS[county_name]
@@ -174,13 +184,15 @@ def run_scrapers(config: dict) -> pd.DataFrame:
                 all_records.extend(records)
                 status.write(f"{county_name}: found **{len(records)}** record(s).")
                 if records:
-                    county_df = processor.process(records)
-                    partial_df = st.session_state.get(partial_key, pd.DataFrame())
+                    county_df = _records_to_dataframe(records)
+                    partial_df = st.session_state[partial_key]
                     updated_partial_df = pd.concat(
                         [partial_df, county_df],
                         ignore_index=True,
                     )
                     st.session_state[partial_key] = updated_partial_df
+                    # Keep both keys updated so page-level UI can always read either
+                    # "final results" or "partial results" consistently mid-run.
                     st.session_state[results_key] = updated_partial_df
                     partial_path = save_results_csv(
                         updated_partial_df,
@@ -208,6 +220,10 @@ def run_scrapers(config: dict) -> pd.DataFrame:
         )
         return pd.DataFrame()
 
+    processor = DataProcessor(
+        enable_skip_tracing=config["skip_tracing"],
+        max_skip_trace_per_batch=20,
+    )
     with st.spinner("Processing and enriching data..."):
         df = processor.process(all_records)
 
