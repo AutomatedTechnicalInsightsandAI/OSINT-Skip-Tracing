@@ -17,6 +17,36 @@ from skip_tracing.google_dorking import GoogleDorker
 logger = logging.getLogger(__name__)
 
 
+def classify_lead(row: dict) -> str:
+    owner = str(row.get("Owner Name", "")).upper()
+    prop_addr = str(row.get("Property Address", "")).upper().strip()
+    mail_addr = str(row.get("Mailing Address", "")).upper().strip()
+    is_heloc = str(row.get("Is HELOC", "")).lower() in ("true", "1", "yes")
+    balloon_bal_raw = str(row.get("Balloon Balance", "")).strip()
+    maturity = str(row.get("Maturity Date", "")).strip()
+    sales_strat = str(row.get("Sales Strategy", "")).strip()
+
+    if sales_strat and sales_strat != "Mortgage Mod – Review for Refi":
+        return sales_strat
+
+    trust_tokens = ["TRUST", "TTEE", "TRUSTEE", "LAND TRUST", "REVOCABLE", "LIVING TRUST"]
+    is_trust = any(t in owner for t in trust_tokens)
+    is_absentee = bool(prop_addr and mail_addr and prop_addr != mail_addr)
+
+    if is_heloc:
+        return "HELOC – Review Credit Limit & Terms"
+    try:
+        if balloon_bal_raw and float(balloon_bal_raw.replace(",", "")) > 0:
+            return f"Balloon Due: {maturity}" if maturity else "Balloon – Maturity Date TBD"
+    except ValueError:
+        pass
+    if is_trust and is_absentee:
+        return "Trust DSCR Candidate – Absentee Owner"
+    if is_trust:
+        return "Trust – Potential Equity Refi"
+    return "Mortgage Mod – Review for Refi"
+
+
 class DataProcessor:
     """
     Merge property records with skip-traced email/LinkedIn data.
@@ -52,6 +82,10 @@ class DataProcessor:
             return pd.DataFrame(columns=self._column_order())
 
         df = pd.DataFrame([r.to_dict() for r in records])
+        if "Sales Strategy" in df.columns:
+            df["Sales Strategy"] = df.apply(classify_lead, axis=1)
+        else:
+            df["Sales Strategy"] = df.apply(classify_lead, axis=1)
 
         if self.enable_skip_tracing:
             df = self._attach_emails(df)

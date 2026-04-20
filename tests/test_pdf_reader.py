@@ -5,9 +5,11 @@ Tests for OCR-backed PDF extraction and mortgage term parsing.
 from __future__ import annotations
 
 from utils.pdf_reader import (
+    ModAgreementInfo,
     MortgageDocumentInfo,
     _parse_date_flexible,
     estimate_principal_from_doc_stamp,
+    extract_mod_agreement_info,
     extract_mortgage_document_info,
     extract_pdf_text,
     is_balloon_mortgage_first_page,
@@ -210,3 +212,49 @@ def test_is_balloon_mortgage_first_page_returns_false_for_empty_or_invalid_pdf(m
 
     assert is_balloon_mortgage_first_page(b"") is False
     assert is_balloon_mortgage_first_page(b"%PDF-bad") is False
+
+
+def test_extract_mod_agreement_info_extracts_mod_terms(monkeypatch):
+    mod_text = """
+    INSTRUMENT # 2025012345
+    'Borrower' is SUNCOAST LIVING TRUST, the party or parties who have signed this Security Instrument.
+    Property Address: 100 MAIN ST SARASOTA FL 34236
+    MODIFIED PRINCIPAL BALANCE $280,500.25
+    The Credit Limit is $ 3 5 0 , 0 0 0 . 0 0
+    FIXED-RATE
+    Note shall bear interest at 7.25% per annum.
+    Maturity Date is due by November 10, 2027.
+    THIS IS A BALLOON MORTGAGE. THE PRINCIPAL BALANCE DUE UPON MATURITY IS $95,000.00
+    HOME EQUITY LINE OF CREDIT
+    """
+    monkeypatch.setattr(
+        "utils.pdf_reader.extract_pdf_text",
+        lambda *_args, **kwargs: type(
+            "Extraction",
+            (),
+            {"text": mod_text, "method": "ocr", "page_count": 2},
+        )()
+        if kwargs.get("max_pages") != 2
+        else type(
+            "Extraction",
+            (),
+            {"text": "HOME EQUITY LINE OF CREDIT", "method": "ocr", "page_count": 2},
+        )(),
+    )
+
+    info = extract_mod_agreement_info(b"%PDF-mod")
+
+    assert isinstance(info, ModAgreementInfo)
+    assert info.instrument_number == "2025012345"
+    assert info.borrower_name == "SUNCOAST LIVING TRUST"
+    assert info.property_address == "100 MAIN ST SARASOTA FL 34236"
+    assert info.modified_principal == "280500.25"
+    assert info.interest_rate == "7.25%"
+    assert info.rate_type == "Fixed"
+    assert info.maturity_date == "November 10, 2027"
+    assert info.is_heloc is True
+    assert info.credit_limit == "350000.00"
+    assert info.balloon_balance == 95000.0
+    assert info.has_balloon_signal is True
+    assert "TRUST" in info.trust_keywords_found
+    assert info.extraction_method == "ocr"

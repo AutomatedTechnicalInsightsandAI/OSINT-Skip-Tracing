@@ -222,13 +222,27 @@ def test_fetch_records_routes_balloon_prospects_union(monkeypatch):
             )
         ],
     )
+    monkeypatch.setattr(
+        scraper,
+        "_fetch_mortgage_mod_leads",
+        lambda max_results: [
+            PropertyRecord(
+                owner_name="SUNCOAST LIVING TRUST",
+                county="Sarasota",
+                lead_type=LeadType.BALLOON_PROSPECTS.value,
+                instrument_number="2021009999",
+                sales_strategy="Trust – Potential Equity Refi",
+            )
+        ],
+    )
 
     records = scraper.fetch_records(LeadType.BALLOON_PROSPECTS, max_results=5)
 
-    assert len(records) == 3
+    assert len(records) == 4
     assert records[0].lead_type == LeadType.BALLOON_PROSPECTS.value
     assert records[1].lead_type == LeadType.BALLOON_PROSPECTS.value
     assert records[2].lead_type == LeadType.BALLOON_PROSPECTS.value
+    assert records[3].lead_type == LeadType.BALLOON_PROSPECTS.value
 
 
 def test_is_likely_personal_name_rejects_bank():
@@ -772,3 +786,86 @@ def test_fetch_maturing_commercial_debt_adds_commercial_borrower_flag(monkeypatc
 
     assert len(records) == 1
     assert "Commercial Borrower: True" in records[0].notes
+
+
+def test_classify_mod_lead_priority_heloc_over_other_signals():
+    strategy = SarasotaScraper._classify_mod_lead(
+        owner_name="SUNCOAST LIVING TRUST",
+        property_address="10 MAIN ST",
+        mailing_address="PO BOX 20",
+        is_heloc=True,
+        maturity_date="November 10, 2027",
+        has_balloon_signal=True,
+        balloon_balance=95000.0,
+    )
+    assert strategy == "HELOC – Review Credit Limit & Terms"
+
+
+def test_fetch_mortgage_mod_leads_extracts_and_classifies(monkeypatch):
+    scraper = SarasotaScraper(headless=True)
+    page = _FakeLoopPage()
+    image_browser = _FakeImageBrowser()
+    scraper._browser = image_browser
+
+    monkeypatch.setattr(scraper, "MATURING_SEARCH_YEARS", (2024,))
+    monkeypatch.setattr(scraper, "BALLOON_SCAN_TARGET", 5)
+    monkeypatch.setattr(scraper, "new_page", lambda: page)
+    monkeypatch.setattr(scraper, "_search_official_records", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        scraper,
+        "_parse_results",
+        lambda _page: [
+            {
+                "instrument_number": "2024001001",
+                "image_url": "https://secure.sarasotaclerk.com/viewTiff.aspx?intrnum=2024001001",
+                "instrument_type": "MORTGAGE MOD AGREEMT",
+                "rec_date": "04/01/2024",
+                "grantee": "SUNCOAST LIVING TRUST",
+            }
+        ],
+    )
+    monkeypatch.setattr(scraper, "_download_clerk_pdf", lambda **_kwargs: b"%PDF")
+    monkeypatch.setattr("scrapers.sarasota_scraper.is_balloon_mortgage_first_page", lambda _pdf: False)
+    monkeypatch.setattr(
+        "scrapers.sarasota_scraper.extract_pdf_text",
+        lambda *_args, **_kwargs: type("Extraction", (), {"text": "MODIFICATION AGREEMENT", "method": "text"})(),
+    )
+    monkeypatch.setattr(
+        "scrapers.sarasota_scraper.extract_mod_agreement_info",
+        lambda _pdf: type(
+            "ModInfo",
+            (),
+            {
+                "borrower_name": "SUNCOAST LIVING TRUST",
+                "property_address": "10 MAIN ST",
+                "instrument_number": "2024001001",
+                "modified_principal": "280500.25",
+                "interest_rate": "7.25%",
+                "rate_type": "Fixed",
+                "maturity_date": "November 10, 2027",
+                "is_heloc": False,
+                "credit_limit": "350000.00",
+                "balloon_balance": 95000.0,
+                "has_balloon_signal": True,
+                "trust_keywords_found": ["TRUST"],
+                "extraction_method": "ocr",
+                "extracted_text": "sample",
+            },
+        )(),
+    )
+
+    def _enrich(record, _name):
+        record.mailing_address = "PO BOX 20"
+        return record
+
+    monkeypatch.setattr(scraper, "_enrich_record_from_pa_owner_search", _enrich)
+
+    records = scraper._fetch_mortgage_mod_leads(max_results=5)
+
+    assert len(records) == 1
+    assert records[0].instrument_number == "2024001001"
+    assert records[0].modified_principal == "280500.25"
+    assert records[0].sales_strategy == "Balloon Due: November 10, 2027"
+    assert records[0].trust_keywords == "TRUST"
+    assert len(image_browser.contexts) == 1
+    assert image_browser.contexts[0].closed is True
