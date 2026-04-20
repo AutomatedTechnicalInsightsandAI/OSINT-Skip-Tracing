@@ -34,7 +34,10 @@ class MortgageDocumentInfo:
 
     instrument_number: str = ""
     borrower_name: str = ""
+    borrower_address: str = ""
     lender_name: str = ""
+    lender_address: str = ""
+    trust_name: str = ""
     credit_limit: str = ""
     interest_rate: str = ""
     maturity_date: str = ""
@@ -50,6 +53,9 @@ class ModAgreementInfo:
     """Structured terms pulled from a mortgage modification agreement PDF."""
 
     borrower_name: str = ""
+    borrower_address: str = ""
+    lender_address: str = ""
+    trust_name: str = ""
     property_address: str = ""
     instrument_number: str = ""
     modified_principal: str = ""
@@ -256,6 +262,9 @@ def extract_mod_agreement_info(
 
     info = ModAgreementInfo(
         borrower_name=mortgage_info.borrower_name,
+        borrower_address=mortgage_info.borrower_address,
+        lender_address=mortgage_info.lender_address,
+        trust_name=mortgage_info.trust_name,
         property_address=property_address,
         instrument_number=mortgage_info.instrument_number,
         modified_principal=modified_principal,
@@ -307,6 +316,31 @@ def parse_mortgage_document_info(text: str) -> MortgageDocumentInfo:
             [
                 r"['\"]?Lender['\"]?\s+is\s+(.+?)\.\s+Lender\s+is",
                 r"After\s+Recording\s+Return\s+To:\s*(.+?)\s+Document\s+Imaging",
+            ],
+            flattened,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    )
+
+    address_matches = [
+        _clean_phrase(match)
+        for match in re.findall(
+            r"whose\s+(?:post\s+office\s+)?address\s+is\s+(.+?)(?=,\s*(?:and\s+|['\"]?\(?Lender|$)|[.;\n])",
+            flattened,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if _clean_phrase(match)
+    ]
+    if address_matches:
+        info.borrower_address = address_matches[0]
+    if len(address_matches) > 1:
+        info.lender_address = address_matches[1]
+
+    info.trust_name = _clean_phrase(
+        _search_first(
+            [
+                r"Trustees?\s+of\s+(?:the\s+)?(.+?\bTrust(?:\s+dated\s+[A-Za-z]+\s+\d{1,2},\s+\d{4})?)\s*\(\s*['\"]?Lender['\"]?\s*\)",
+                r"Trustees?\s+of\s+(?:the\s+)?(.+?\bTrust(?:\s+dated\s+[A-Za-z]+\s+\d{1,2},\s+\d{4})?)",
             ],
             flattened,
             flags=re.IGNORECASE | re.DOTALL,

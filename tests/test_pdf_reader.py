@@ -74,6 +74,21 @@ def test_parse_mortgage_document_info_extracts_borrower_name():
     assert info.borrower_name == "SUNCOAST OFFICE PARK LLC, a Florida limited liability company"
 
 
+def test_parse_mortgage_document_info_extracts_addresses_and_trust_name():
+    info = parse_mortgage_document_info(
+        """
+        THIS MORTGAGE is made by and between Thomas G. Carlson, a single man, whose post office address is
+        4534 Pawnee Trail #198, Sarasota, Florida 34233, and William Frederick Rood and Winifred M. Rood,
+        Co-Trustees of the Rood Family Trust dated February 16, 2017 ("Lender"), whose post office address is
+        4642 Tippecanoe Trail #108, Sarasota, Florida 34233.
+        """
+    )
+
+    assert info.borrower_address == "4534 Pawnee Trail #198, Sarasota, Florida 34233"
+    assert info.lender_address == "4642 Tippecanoe Trail #108, Sarasota, Florida 34233"
+    assert info.trust_name == "Rood Family Trust dated February 16, 2017"
+
+
 def test_extract_pdf_text_prefers_native_text(monkeypatch):
     monkeypatch.setattr("utils.pdf_reader._count_pdf_pages", lambda *_args, **_kwargs: 1)
     monkeypatch.setattr(
@@ -217,6 +232,9 @@ def test_is_balloon_mortgage_first_page_returns_false_for_empty_or_invalid_pdf(m
 def test_extract_mod_agreement_info_extracts_mod_terms(monkeypatch):
     mod_text = """
     INSTRUMENT # 2025012345
+    THIS MORTGAGE is made by and between SUNCOAST LIVING TRUST, whose post office address is
+    100 MAIN ST SARASOTA FL 34236, and Jane Roe, Trustee of the Coastal Family Trust dated January 10, 2020
+    ("Lender"), whose post office address is 200 OAK AVE SARASOTA FL 34237.
     'Borrower' is SUNCOAST LIVING TRUST, the party or parties who have signed this Security Instrument.
     Property Address: 100 MAIN ST SARASOTA FL 34236
     MODIFIED PRINCIPAL BALANCE $280,500.25
@@ -247,6 +265,9 @@ def test_extract_mod_agreement_info_extracts_mod_terms(monkeypatch):
     assert isinstance(info, ModAgreementInfo)
     assert info.instrument_number == "2025012345"
     assert info.borrower_name == "SUNCOAST LIVING TRUST"
+    assert info.borrower_address == "100 MAIN ST SARASOTA FL 34236"
+    assert info.lender_address == "200 OAK AVE SARASOTA FL 34237"
+    assert info.trust_name == "Coastal Family Trust dated January 10, 2020"
     assert info.property_address == "100 MAIN ST SARASOTA FL 34236"
     assert info.modified_principal == "280500.25"
     assert info.interest_rate == "7.25%"
