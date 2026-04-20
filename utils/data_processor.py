@@ -44,6 +44,21 @@ def classify_lead(row: dict) -> str:
         return "Trust DSCR Candidate – Absentee Owner"
     if is_trust:
         return "Trust – Potential Equity Refi"
+    mtg_amt_at_purchase = str(row.get("Mtg Amt At Purchase", "")).strip()
+    sale_price = str(row.get("Sale Price", "")).strip()
+    just_value = str(row.get("Just Value", "")).strip()
+    modified_principal = str(row.get("Modified Principal", "")).strip()
+    if mtg_amt_at_purchase == "0":
+        return "Cash-Out Refi Candidate – Equity Available"
+    try:
+        mod_principal_float = float((modified_principal or "").replace(",", "").strip())
+        if mod_principal_float > 0:
+            for value_str in (sale_price, just_value):
+                value_float = float((value_str or "").replace(",", "").strip() or "0")
+                if value_float > 0 and (mod_principal_float / value_float) < 0.70:
+                    return "Cash-Out Refi Candidate – Equity Available"
+    except (ValueError, ZeroDivisionError):
+        pass
     return "Mortgage Mod – Review for Refi"
 
 

@@ -188,6 +188,35 @@ def test_classify_lead_prefers_heloc():
     assert strategy == "HELOC – Review Credit Limit & Terms"
 
 
+def test_classify_lead_cashout_refi_for_zero_purchase_mortgage():
+    strategy = classify_lead(
+        {
+            "Owner Name": "ANY OWNER",
+            "Property Address": "10 MAIN ST",
+            "Mailing Address": "10 MAIN ST",
+            "Mtg Amt At Purchase": "0",
+            "Sale Price": "450000",
+            "Just Value": "500000",
+            "Modified Principal": "350000",
+        }
+    )
+    assert strategy == "Cash-Out Refi Candidate – Equity Available"
+
+
+def test_classify_lead_cashout_refi_for_low_ltv():
+    strategy = classify_lead(
+        {
+            "Owner Name": "ANY OWNER",
+            "Property Address": "10 MAIN ST",
+            "Mailing Address": "10 MAIN ST",
+            "Mtg Amt At Purchase": "220000",
+            "Sale Price": "400000",
+            "Modified Principal": "250000",
+        }
+    )
+    assert strategy == "Cash-Out Refi Candidate – Equity Available"
+
+
 def test_process_applies_sales_strategy_classification(processor_no_skip):
     record = PropertyRecord(
         owner_name="SUNCOAST LIVING TRUST",

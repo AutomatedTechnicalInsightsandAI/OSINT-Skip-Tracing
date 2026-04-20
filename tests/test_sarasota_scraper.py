@@ -801,6 +801,40 @@ def test_classify_mod_lead_priority_heloc_over_other_signals():
     assert strategy == "HELOC – Review Credit Limit & Terms"
 
 
+def test_classify_mod_lead_cashout_refi_for_zero_purchase_mortgage():
+    strategy = SarasotaScraper._classify_mod_lead(
+        owner_name="ANY OWNER",
+        property_address="10 MAIN ST",
+        mailing_address="10 MAIN ST",
+        is_heloc=False,
+        maturity_date="",
+        has_balloon_signal=False,
+        balloon_balance=0.0,
+        mtg_amt_at_purchase="0",
+        sale_price="450000",
+        just_value="500000",
+        modified_principal="300000",
+    )
+    assert strategy == "Cash-Out Refi Candidate – Equity Available"
+
+
+def test_classify_mod_lead_cashout_refi_for_low_ltv():
+    strategy = SarasotaScraper._classify_mod_lead(
+        owner_name="ANY OWNER",
+        property_address="10 MAIN ST",
+        mailing_address="10 MAIN ST",
+        is_heloc=False,
+        maturity_date="",
+        has_balloon_signal=False,
+        balloon_balance=0.0,
+        mtg_amt_at_purchase="180000",
+        sale_price="400000",
+        just_value="",
+        modified_principal="250000",
+    )
+    assert strategy == "Cash-Out Refi Candidate – Equity Available"
+
+
 def test_fetch_mortgage_mod_leads_extracts_and_classifies(monkeypatch):
     scraper = SarasotaScraper(headless=True)
     page = _FakeLoopPage()
