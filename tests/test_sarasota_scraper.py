@@ -634,6 +634,63 @@ def test_fetch_balloon_balance_leads_skips_non_2026_2027_maturity(monkeypatch):
     assert page.context.closed is True
 
 
+def test_fetch_balloon_balance_leads_respects_balloon_scan_target(monkeypatch):
+    scraper = SarasotaScraper(headless=True)
+    page = _FakeLoopPage()
+    download_calls: list[str] = []
+
+    monkeypatch.setattr(scraper, "MATURING_SEARCH_YEARS", (2021,))
+    monkeypatch.setattr(scraper, "BALLOON_SCAN_TARGET", 1)
+    monkeypatch.setattr(scraper, "new_page", lambda: page)
+    monkeypatch.setattr(scraper, "_search_official_records", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        scraper,
+        "_parse_results",
+        lambda _page: [
+            {
+                "instrument_number": "2021007001",
+                "image_url": "",
+                "instrument_type": "MORTGAGE",
+                "rec_date": "04/01/2021",
+                "grantee": "FIRST BORROWER",
+            },
+            {
+                "instrument_number": "2021007002",
+                "image_url": "",
+                "instrument_type": "MORTGAGE",
+                "rec_date": "04/01/2021",
+                "grantee": "SECOND BORROWER",
+            },
+        ],
+    )
+
+    def _download(**kwargs):
+        download_calls.append(kwargs["instrument_number"])
+        return b"%PDF"
+
+    monkeypatch.setattr(scraper, "_download_clerk_pdf", _download)
+    monkeypatch.setattr("scrapers.sarasota_scraper.is_balloon_mortgage_first_page", lambda _pdf: True)
+    monkeypatch.setattr(
+        scraper,
+        "_extract_mortgage_pdf_terms",
+        lambda _pdf: {
+            "borrower_name": "SAMPLE BORROWER",
+            "maturity_date": "04/01/2027",
+            "pdf_text": (
+                "THIS IS A BALLOON MORTGAGE AND THE FINAL PRINCIPAL PAYMENT OR THE "
+                "PRINCIPAL BALANCE DUE UPON MATURITY IS $280,000.00"
+            ),
+        },
+    )
+    monkeypatch.setattr(scraper, "_enrich_record_from_pa_owner_search", lambda record, _name: record)
+
+    records = scraper._fetch_balloon_balance_leads(max_results=5)
+
+    assert len(records) == 1
+    assert download_calls == ["2021007001"]
+    assert page.context.closed is True
+
+
 def test_balloon_flows_reopen_page_after_target_closed(monkeypatch):
     for method_name in (
         "_fetch_maturing_commercial_debt",
