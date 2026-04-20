@@ -1,5 +1,5 @@
 from scrapers.base_scraper import LeadType
-from utils.lead_app_utils import LEAD_TYPE_HELP
+from utils.lead_app_utils import LEAD_TYPE_HELP, OUTREACH_PRIORITY_COLUMNS
 
 
 def test_lead_type_help_contains_all_supported_types():
@@ -18,3 +18,16 @@ def test_balloon_help_text_mentions_2026_2027_and_scan_target():
     help_text = LEAD_TYPE_HELP[LeadType.BALLOON_PROSPECTS]
     assert "2026 or 2027" in help_text
     assert "1,000 PDFs per run" in help_text
+
+
+def test_outreach_priority_columns_include_mod_strategy_fields():
+    expected = [
+        "Sales Strategy",
+        "Modified Principal",
+        "Is HELOC",
+        "Credit Limit",
+        "Rate Type",
+        "Trust Keywords",
+    ]
+    for col in expected:
+        assert col in OUTREACH_PRIORITY_COLUMNS

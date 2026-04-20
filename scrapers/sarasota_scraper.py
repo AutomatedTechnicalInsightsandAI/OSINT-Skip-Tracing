@@ -33,7 +33,9 @@ from scrapers.base_scraper import (
 from utils.pdf_reader import (
     _parse_date_flexible,
     estimate_principal_from_doc_stamp,
+    extract_mod_agreement_info,
     extract_mortgage_document_info,
+    extract_pdf_text,
     is_balloon_mortgage_first_page,
 )
 
@@ -51,6 +53,7 @@ class SarasotaScraper(BaseScraper):
     PA_PARCEL_URL = "https://www.sc-pa.com/propertysearch/parcel/details/{parcel_id}"
     DOC_TYPE_ALIASES = {
         "CERTIFICATE OF TITLE": "CERT OF TITLE",
+        "MORTGAGE MOD AGREEMENT": "MORTGAGE MOD AGREEMT",
     }
     CASHOUT_SALE_FROM = datetime(2023, 7, 1)
     CASHOUT_SALE_TO = datetime(2024, 9, 30)
@@ -738,6 +741,28 @@ class SarasotaScraper(BaseScraper):
             "pdf_text": info.extracted_text,
         }
 
+    def _open_and_close_view_image(self, image_url: str, instrument_number: str) -> None:
+        """Open a clerk View Image URL in a throwaway context and close immediately."""
+        if not image_url:
+            return
+        img_page = None
+        try:
+            img_page = self._browser.new_context().new_page()
+            img_page.set_default_timeout(15_000)
+            img_page.goto(image_url, wait_until="load", timeout=15_000)
+        except Exception as exc:
+            logger.debug(
+                "Sarasota balloon: view-image open failed for %s: %s",
+                instrument_number,
+                repr(exc),
+            )
+        finally:
+            if img_page is not None:
+                try:
+                    img_page.context.close()
+                except Exception:
+                    pass
+
     def _download_clerk_pdf(
         self,
         *,
@@ -1147,6 +1172,162 @@ class SarasotaScraper(BaseScraper):
             except ValueError:
                 continue
         return 0.0
+
+    @staticmethod
+    def _classify_mod_lead(
+        *,
+        owner_name: str,
+        property_address: str,
+        mailing_address: str,
+        is_heloc: bool,
+        maturity_date: str,
+        has_balloon_signal: bool,
+        balloon_balance: float,
+    ) -> str:
+        trust_tokens = ["TRUST", "TTEE", "TRUSTEE", "LAND TRUST", "REVOCABLE", "LIVING TRUST"]
+        owner_upper = (owner_name or "").upper()
+        prop = " ".join((property_address or "").upper().replace(",", " ").split())
+        mail = " ".join((mailing_address or "").upper().replace(",", " ").split())
+        is_trust = any(token in owner_upper for token in trust_tokens)
+        is_absentee = bool(prop and mail and prop != mail)
+
+        if is_heloc:
+            return "HELOC – Review Credit Limit & Terms"
+        if has_balloon_signal or balloon_balance > 0:
+            return f"Balloon Due: {maturity_date}" if maturity_date else "Balloon – Maturity Date TBD"
+        if is_trust and is_absentee:
+            return "Trust DSCR Candidate – Absentee Owner"
+        if is_trust:
+            return "Trust – Potential Equity Refi"
+        return "Mortgage Mod – Review for Refi"
+
+    def _fetch_mortgage_mod_leads(self, max_results: int) -> List[PropertyRecord]:
+        """Fetch Sarasota mortgage modification agreement leads and classify sales strategy."""
+        records: List[PropertyRecord] = []
+        seen_instruments: set[str] = set()
+        scan_limit = self.BALLOON_SCAN_TARGET
+        scanned = 0
+
+        try:
+            page = self.new_page()
+            for year in self.MATURING_SEARCH_YEARS:
+                if len(records) >= max_results or scanned >= scan_limit:
+                    break
+                try:
+                    self._search_official_records(
+                        page,
+                        "MORTGAGE MOD AGREEMT",
+                        f"01/01/{year}",
+                        f"12/31/{year}",
+                    )
+                    rows = self._parse_results(page)
+                except Exception as exc:
+                    if self._is_target_closed_error(exc):
+                        logger.warning(
+                            "Sarasota mortgage mod: page closed mid-search for year %d, reopening",
+                            year,
+                        )
+                        page = self._get_fresh_page(page)
+                        try:
+                            self._search_official_records(
+                                page,
+                                "MORTGAGE MOD AGREEMT",
+                                f"01/01/{year}",
+                                f"12/31/{year}",
+                            )
+                            rows = self._parse_results(page)
+                        except Exception as retry_exc:
+                            logger.warning(
+                                "Sarasota mortgage mod: retry failed for year %d: %s",
+                                year,
+                                repr(retry_exc),
+                            )
+                            continue
+                    else:
+                        raise
+
+                for row in rows:
+                    if len(records) >= max_results or scanned >= scan_limit:
+                        break
+
+                    instrument_number = row.get("instrument_number", "").strip()
+                    if not instrument_number or instrument_number in seen_instruments:
+                        continue
+                    seen_instruments.add(instrument_number)
+
+                    image_url = row.get("image_url", "").strip()
+                    self._open_and_close_view_image(image_url, instrument_number)
+
+                    pdf_bytes = self._download_clerk_pdf(
+                        image_url=image_url,
+                        instrument_number=instrument_number,
+                    )
+                    if not pdf_bytes:
+                        continue
+                    scanned += 1
+
+                    has_balloon_on_first_page = is_balloon_mortgage_first_page(pdf_bytes)
+                    first_page_extraction = extract_pdf_text(pdf_bytes, max_pages=1, force_ocr=False)
+                    compact_first_page = " ".join((first_page_extraction.text or "").split())
+                    first_page_empty = (
+                        not compact_first_page
+                        or len(compact_first_page) < 20
+                        or not any(char.isalpha() for char in compact_first_page)
+                    )
+                    if not has_balloon_on_first_page and first_page_empty:
+                        continue
+
+                    mod_info = extract_mod_agreement_info(pdf_bytes)
+                    borrower_name = mod_info.borrower_name.strip() or row.get("grantee", "").strip()
+                    if not borrower_name:
+                        continue
+
+                    record = PropertyRecord(
+                        owner_name=borrower_name,
+                        property_address=mod_info.property_address,
+                        last_sale_date=row.get("rec_date", ""),
+                        estimated_interest_rate=mod_info.interest_rate,
+                        county=self.county_name,
+                        deed_type=row.get("instrument_type", ""),
+                        lead_type=LeadType.BALLOON_PROSPECTS.value,
+                        instrument_number=mod_info.instrument_number.strip() or instrument_number,
+                        maturity_date=mod_info.maturity_date,
+                        balloon_balance=(
+                            str(int(round(mod_info.balloon_balance)))
+                            if mod_info.balloon_balance > 0
+                            else ""
+                        ),
+                        modified_principal=mod_info.modified_principal,
+                        rate_type=mod_info.rate_type,
+                        is_heloc=str(mod_info.is_heloc),
+                        credit_limit=mod_info.credit_limit,
+                        trust_keywords=", ".join(mod_info.trust_keywords_found),
+                        pdf_extraction_method=mod_info.extraction_method,
+                        view_image_url=image_url,
+                        lead_source="Sarasota Official Records + OCR",
+                    )
+                    record = self._enrich_record_from_pa_owner_search(record, borrower_name)
+                    record.sales_strategy = self._classify_mod_lead(
+                        owner_name=record.owner_name,
+                        property_address=record.property_address,
+                        mailing_address=record.mailing_address,
+                        is_heloc=mod_info.is_heloc,
+                        maturity_date=record.maturity_date,
+                        has_balloon_signal=mod_info.has_balloon_signal,
+                        balloon_balance=mod_info.balloon_balance,
+                    )
+                    records.append(record)
+
+            page.context.close()
+        except Exception as exc:
+            logger.error("Sarasota mortgage mod scrape failed: %s", repr(exc))
+
+        logger.info(
+            "Sarasota mortgage mod leads found: %d (scanned %d PDFs)",
+            len(records),
+            scanned,
+        )
+        return records
 
     def _fetch_balloon_balance_leads(self, max_results: int) -> List[PropertyRecord]:
         """Primary Sarasota balloon pipeline: OCR-confirmed balloon balance maturing in 2026-2027."""
@@ -2143,6 +2324,7 @@ class SarasotaScraper(BaseScraper):
             self._fetch_balloon_balance_leads(max_results)
             + self._fetch_maturing_commercial_debt(max_results)
             + self._fetch_sarasota_personal_commercial_balloon_clients(max_results)
+            + self._fetch_mortgage_mod_leads(max_results)
         ):
             instrument = (record.instrument_number or "").strip()
             key: tuple[str, ...] = (

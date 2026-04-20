@@ -77,6 +77,12 @@ def main():
     if saved_csv_path:
         st.caption(f"Saved to `{saved_csv_path}`")
     render_metrics(df)
+    if "Sales Strategy" in df.columns and not df["Sales Strategy"].isna().all():
+        st.subheader("Lead Strategy Breakdown")
+        strategy_counts = df["Sales Strategy"].value_counts()
+        s_cols = st.columns(min(len(strategy_counts), 4))
+        for i, (strategy, count) in enumerate(strategy_counts.items()):
+            s_cols[i % 4].metric(strategy[:35], int(count))
     render_results_table(df)
 
 

@@ -10,7 +10,7 @@ import pytest
 import pandas as pd
 
 from scrapers.base_scraper import LeadType, PropertyRecord
-from utils.data_processor import DataProcessor
+from utils.data_processor import DataProcessor, classify_lead
 from utils.csv_exporter import CSVExporter
 
 
@@ -174,6 +174,36 @@ def test_process_preserves_balloon_prospects_lead_type(processor_no_skip):
     assert bool(row["Maturing Loan Candidate"]) is True
     assert row["Lead Strategy"] == LeadType.BALLOON_PROSPECTS.value
     assert int(row["Lead Score"]) >= 35
+
+
+def test_classify_lead_prefers_heloc():
+    strategy = classify_lead(
+        {
+            "Owner Name": "ANY OWNER",
+            "Is HELOC": "true",
+            "Balloon Balance": "90000",
+            "Maturity Date": "November 10, 2027",
+        }
+    )
+    assert strategy == "HELOC – Review Credit Limit & Terms"
+
+
+def test_process_applies_sales_strategy_classification(processor_no_skip):
+    record = PropertyRecord(
+        owner_name="SUNCOAST LIVING TRUST",
+        property_address="10 MAIN ST",
+        mailing_address="PO BOX 20",
+        sale_price="250000",
+        just_value="500000",
+        assessed_value="450000",
+        taxable_value="440000",
+        mtg_amt_at_purchase="200000",
+        county="Sarasota",
+        lead_type=LeadType.BALLOON_PROSPECTS.value,
+        sales_strategy="Mortgage Mod – Review for Refi",
+    )
+    df = processor_no_skip.process([record])
+    assert df.iloc[0]["Sales Strategy"] == "Trust DSCR Candidate – Absentee Owner"
 
 
 # ---------------------------------------------------------------------------

@@ -59,6 +59,12 @@ class PropertyRecord:
     lender_name: str = ""
     maturity_date: str = ""
     balloon_balance: str = ""
+    modified_principal: str = ""
+    rate_type: str = ""
+    is_heloc: str = ""
+    credit_limit: str = ""
+    sales_strategy: str = ""
+    trust_keywords: str = ""
     pdf_extraction_method: str = ""
     view_image_url: str = ""
     year_built: str = ""
@@ -92,6 +98,12 @@ class PropertyRecord:
             "Lender Name": self.lender_name,
             "Maturity Date": self.maturity_date,
             "Balloon Balance": self.balloon_balance,
+            "Modified Principal": self.modified_principal,
+            "Rate Type": self.rate_type,
+            "Is HELOC": self.is_heloc,
+            "Credit Limit": self.credit_limit,
+            "Sales Strategy": self.sales_strategy,
+            "Trust Keywords": self.trust_keywords,
             "PDF Extraction Method": self.pdf_extraction_method,
             "View Image URL": self.view_image_url,
             "Year Built": self.year_built,

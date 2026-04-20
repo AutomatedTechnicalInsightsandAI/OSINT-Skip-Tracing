@@ -4,7 +4,7 @@ PDF text extraction helpers with OCR fallback for scanned clerk records.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from functools import lru_cache
 from io import BytesIO
@@ -41,6 +41,26 @@ class MortgageDocumentInfo:
     balloon_balance: str = ""
     doc_stamp_mortgage: str = ""
     intangible_tax: str = ""
+    extraction_method: str = "none"
+    extracted_text: str = ""
+
+
+@dataclass
+class ModAgreementInfo:
+    """Structured terms pulled from a mortgage modification agreement PDF."""
+
+    borrower_name: str = ""
+    property_address: str = ""
+    instrument_number: str = ""
+    modified_principal: str = ""
+    interest_rate: str = ""
+    rate_type: str = ""
+    maturity_date: str = ""
+    is_heloc: bool = False
+    credit_limit: str = ""
+    balloon_balance: float = 0.0
+    has_balloon_signal: bool = False
+    trust_keywords_found: list[str] = field(default_factory=list)
     extraction_method: str = "none"
     extracted_text: str = ""
 
@@ -120,6 +140,137 @@ def is_balloon_mortgage_first_page(pdf_bytes: bytes) -> bool:
         "ENTIRE UNPAID PRINCIPAL BALANCE",
     ]
     return any(signal in upper for signal in balloon_signals)
+
+
+def extract_mod_agreement_info(
+    pdf_source: PdfSource,
+    *,
+    max_pages: int | None = None,
+) -> ModAgreementInfo:
+    """Extract and parse mortgage modification agreement terms from a PDF."""
+    extraction = extract_pdf_text(
+        pdf_source,
+        max_pages=max_pages,
+        force_ocr=True,
+    )
+    text = extraction.text or ""
+    flattened = _flatten_text(text)
+    upper = " ".join(flattened.upper().split())
+
+    mortgage_info = parse_mortgage_document_info(text)
+    first_two_pages = extract_pdf_text(
+        pdf_source,
+        max_pages=2,
+        force_ocr=False,
+    )
+    first_two_upper = " ".join((first_two_pages.text or "").upper().split())
+
+    modified_principal = _normalize_money(
+        _search_first(
+            [
+                r"NEW\s+PRINCIPAL\s+BALANCE[^\$\d]{0,30}\$?\s*([\d,]+(?:\.\d{1,2})?)",
+                r"MODIFIED\s+PRINCIPAL\s+BALANCE[^\$\d]{0,30}\$?\s*([\d,]+(?:\.\d{1,2})?)",
+                r"UNPAID\s+PRINCIPAL\s+BALANCE[^\$\d]{0,30}\$?\s*([\d,]+(?:\.\d{1,2})?)",
+                r"AMENDED\s+(?:LOAN\s+)?AMOUNT[^\$\d]{0,30}\$?\s*([\d,]+(?:\.\d{1,2})?)",
+                r"PRINCIPAL\s+BALANCE\s+OF[^\$\d]{0,20}\$?\s*([\d,]+(?:\.\d{1,2})?)",
+            ],
+            flattened,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    )
+
+    interest_rate = _normalize_percent(
+        _search_first(
+            [
+                r"(?:annual\s+)?interest\s+rate\s*(?:of|is)?\s*([0-9]{1,2}(?:\.[0-9]+)?)\s*%",
+                r"interest\s+at\s+the\s+rate\s+of\s+([0-9]{1,2}(?:\.[0-9]+)?)\s*%",
+                r"fixed\s+rate\s+(?:of|at)\s+([0-9]{1,2}(?:\.[0-9]+)?)\s*%",
+                r"note\s+shall\s+bear\s+interest\s+at\s+([0-9]{1,2}(?:\.[0-9]+)?)\s*%",
+            ],
+            flattened,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    )
+
+    rate_type = ""
+    if "FIXED RATE" in upper or "FIXED-RATE" in upper:
+        rate_type = "Fixed"
+    elif any(token in upper for token in ("ADJUSTABLE", " ARM ", "VARIABLE RATE")):
+        rate_type = "Adjustable"
+
+    heloc_tokens = ("LINE OF CREDIT", "REVOLVING", "HELOC", "HOME EQUITY LINE")
+    is_heloc = any(token in first_two_upper for token in heloc_tokens)
+
+    credit_limit = _normalize_money(
+        _search_first(
+            [
+                r"Credit\s+Limit\s+is\s*\$\s*([0-9][0-9\s,\.]*)",
+                r"MAXIMUM\s+CREDIT\s+LIMIT[^\$\d]{0,20}\$?\s*([0-9][0-9\s,\.]*)",
+                r"LINE\s+OF\s+CREDIT[^\$\d]{0,30}\$?\s*([0-9][0-9\s,\.]*)",
+            ],
+            flattened,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    )
+
+    property_address = _clean_phrase(
+        _search_first(
+            [
+                r"Property\s+Address[:\s]+(.+?)(?:\n|Borrower|Lender|Maturity|$)",
+                r"Property\s+Address\s+is\s+(.+?)(?:\n|Borrower|Lender|Maturity|$)",
+            ],
+            flattened,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    )
+
+    balloon_patterns = [
+        r"BALANCE\s+DUE\s+UPON\s+MATURITY\s+IS\s+\$([\d,]+(?:\.\d{1,2})?)",
+        r"PRINCIPAL\s+BALANCE\s+DUE\s+UPON\s+MATURITY\s+IS[^$\d]{0,40}\$?\s*([\d,]+(?:\.\d{1,2})?)",
+        r"FINAL\s+PRINCIPAL\s+PAYMENT[^$\d]{0,60}\$?\s*([\d,]+(?:\.\d{1,2})?)",
+    ]
+    balloon_balance = 0.0
+    for pattern in balloon_patterns:
+        match = re.search(pattern, upper)
+        if not match:
+            continue
+        try:
+            balloon_balance = float(match.group(1).replace(",", ""))
+            break
+        except ValueError:
+            continue
+    has_balloon_signal = any(
+        token in upper
+        for token in (
+            "BALLOON",
+            "BALLOON PAYMENT",
+            "BALLOON MORTGAGE",
+            "BALANCE DUE UPON MATURITY",
+            "FINAL PRINCIPAL PAYMENT",
+            "ENTIRE PRINCIPAL BALANCE",
+        )
+    )
+
+    trust_tokens = ["TRUST", "TTEE", "TRUSTEE", "LAND TRUST", "REVOCABLE", "LIVING TRUST"]
+    trust_keywords_found = [token for token in trust_tokens if token in upper]
+
+    info = ModAgreementInfo(
+        borrower_name=mortgage_info.borrower_name,
+        property_address=property_address,
+        instrument_number=mortgage_info.instrument_number,
+        modified_principal=modified_principal,
+        interest_rate=interest_rate or mortgage_info.interest_rate,
+        rate_type=rate_type,
+        maturity_date=mortgage_info.maturity_date,
+        is_heloc=is_heloc,
+        credit_limit=credit_limit or mortgage_info.credit_limit,
+        balloon_balance=balloon_balance,
+        has_balloon_signal=has_balloon_signal,
+        trust_keywords_found=trust_keywords_found,
+        extraction_method=extraction.method,
+        extracted_text=text,
+    )
+    return info
 
 
 def parse_mortgage_document_info(text: str) -> MortgageDocumentInfo:
