@@ -7,6 +7,7 @@ from scrapers.base_scraper import LeadType
 from utils.lead_app_utils import (
     LEAD_TYPE_HELP,
     render_county_sidebar,
+    render_download_leads_so_far,
     render_metrics,
     render_results_table,
     run_scrapers,
@@ -57,8 +58,17 @@ def main():
 
     if "trust_results_df" not in st.session_state:
         st.session_state["trust_results_df"] = pd.DataFrame()
+    if "trust_partial_df" not in st.session_state:
+        st.session_state["trust_partial_df"] = pd.DataFrame()
     if "trust_saved_csv_path" not in st.session_state:
         st.session_state["trust_saved_csv_path"] = ""
+
+    render_download_leads_so_far(
+        results_key="trust_results_df",
+        partial_key="trust_partial_df",
+        filename_prefix="trust_refi",
+        widget_key="trust_download_so_far_top",
+    )
 
     if generate:
         run_config = {**config, "lead_type": lead_type}
@@ -85,6 +95,12 @@ def main():
         st.caption(f"Saved to `{saved_csv_path}`")
     render_metrics(df)
     render_results_table(df)
+    render_download_leads_so_far(
+        results_key="trust_results_df",
+        partial_key="trust_partial_df",
+        filename_prefix="trust_refi",
+        widget_key="trust_download_so_far_bottom",
+    )
 
 
 if __name__ == "__main__":
