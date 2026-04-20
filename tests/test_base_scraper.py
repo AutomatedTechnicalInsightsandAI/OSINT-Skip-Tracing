@@ -26,6 +26,7 @@ from scrapers.base_scraper import (
 def test_lead_type_values():
     assert LeadType.CASHOUT_REFI.value == "Recent Purchase Cash-Out Refi Prospects"
     assert LeadType.BALLOON_PROSPECTS.value == "Commercial Balloon Prospects"
+    assert LeadType.TRUST_REFI.value == "Property Held in Trust Refi Prospects"
 
 
 # ---------------------------------------------------------------------------
