@@ -30,11 +30,9 @@ LEAD_TYPE_HELP = {
         "These are strong cash-out refinance targets."
     ),
     LeadType.BALLOON_PROSPECTS: (
-        "Merged balloon/refi target: includes (1) Sarasota mortgage records with OCR-confirmed "
-        "maturity dates in the next 12 months and commercial debt signals (entity borrowers, "
-        "commercial loan language, or matched commercial parcel data); AND (2) commercial "
-        "property with personal-name borrowers, no current exemption, balloon maturity due within "
-        "6 months, and OCR-detected note rate of 8% or higher."
+        "Balloon mortgage prospects: OCR-confirmed balloon signal from Sarasota recorded mortgage "
+        "PDFs. Targets maturities due in 2026 or 2027. No interest rate floor — if they have a "
+        "balloon, they must refi regardless of rate. Scans up to 1,000 PDFs per run."
     ),
     LeadType.TRUST_REFI: (
         "Properties where title is held in a trust (land trust, living trust, or revocable trust) "

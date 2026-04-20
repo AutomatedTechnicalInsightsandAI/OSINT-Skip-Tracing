@@ -62,13 +62,10 @@ class SarasotaScraper(BaseScraper):
     TARGET_QUALIFICATION_CODES = {"01"}
     NON_PERSON_TOKENS = {"TRUST", "TR", "TTEE", "TRUSTEE", "LLC", "INC", "CORP", "CORPORATION", "LP", "LTD", "LC", "CO"}
     CACHE_PATH = Path(".cache") / "sarasota_mortgage_lookup.json"
-    MATURING_SEARCH_YEARS = (2021, 2020, 2019, 2018, 2017, 2016, 2015)
+    MATURING_SEARCH_YEARS = (2024, 2023, 2022, 2021, 2020, 2019, 2018, 2017, 2016)
     MATURING_SCAN_LIMIT_MULTIPLIER = 12
     MATURING_SCAN_MINIMUM = 60
-    BALLOON_MATURITY_MIN_DAYS = 90
-    BALLOON_MATURITY_MAX_DAYS = 183
-    TARGETED_BALLOON_WINDOW_DAYS = 183
-    TARGETED_MIN_INTEREST_RATE = 8.0
+    BALLOON_SCAN_TARGET = 1000
     MIN_BALLOON_BALANCE = 80_000
     PDF_DOWNLOAD_DELAY_SECONDS = 3.0
     PDF_DOWNLOAD_MAX_RETRIES = 3
@@ -1151,24 +1148,12 @@ class SarasotaScraper(BaseScraper):
                 continue
         return 0.0
 
-    @staticmethod
-    def _balloon_maturity_window() -> tuple[datetime.date, datetime.date]:
-        today = datetime.now().date()
-        return (
-            today + timedelta(days=SarasotaScraper.BALLOON_MATURITY_MIN_DAYS),
-            today + timedelta(days=SarasotaScraper.BALLOON_MATURITY_MAX_DAYS),
-        )
-
     def _fetch_balloon_balance_leads(self, max_results: int) -> List[PropertyRecord]:
-        """Primary Sarasota balloon pipeline: OCR-confirmed balloon balance + 3-6 month maturity."""
+        """Primary Sarasota balloon pipeline: OCR-confirmed balloon balance maturing in 2026-2027."""
         records: List[PropertyRecord] = []
         seen_instruments: set[str] = set()
-        scan_limit = max(
-            max_results * self.MATURING_SCAN_LIMIT_MULTIPLIER,
-            self.MATURING_SCAN_MINIMUM,
-        )
+        scan_limit = self.BALLOON_SCAN_TARGET
         scanned = 0
-        maturity_min, maturity_cutoff = self._balloon_maturity_window()
 
         try:
             page = self.new_page()
@@ -1221,14 +1206,23 @@ class SarasotaScraper(BaseScraper):
 
                     image_url = row.get("image_url", "").strip()
                     if image_url:
+                        img_page = None
                         try:
-                            page.goto(image_url, wait_until="load", timeout=20_000)
+                            img_page = self._browser.new_context().new_page()
+                            img_page.set_default_timeout(15_000)
+                            img_page.goto(image_url, wait_until="load", timeout=15_000)
                         except Exception as exc:
                             logger.debug(
-                                "Sarasota balloon balance: view page open failed for %s: %s",
+                                "Sarasota balloon: view-image open failed for %s: %s",
                                 instrument_number,
                                 repr(exc),
                             )
+                        finally:
+                            if img_page is not None:
+                                try:
+                                    img_page.context.close()
+                                except Exception:
+                                    pass
 
                     pdf_bytes = self._download_clerk_pdf(
                         image_url=image_url,
@@ -1260,8 +1254,7 @@ class SarasotaScraper(BaseScraper):
                     maturity_dt = _parse_date_flexible(terms.get("maturity_date", ""))
                     if not maturity_dt:
                         continue
-                    maturity_date = maturity_dt.date()
-                    if not (maturity_min <= maturity_date <= maturity_cutoff):
+                    if maturity_dt.year not in (2026, 2027):
                         continue
 
                     borrower_name = terms.get("borrower_name", "").strip() or row.get("grantee", "")
@@ -1799,17 +1792,13 @@ class SarasotaScraper(BaseScraper):
 
     def _fetch_maturing_commercial_debt(self, max_results: int) -> List[PropertyRecord]:
         """
-        Search Sarasota mortgages for OCR-confirmed near-term maturities that
+        Search Sarasota mortgages for OCR-confirmed maturities in 2026-2027 that
         also show commercial debt signals.
         """
         records: List[PropertyRecord] = []
         seen_instruments: set[str] = set()
-        scan_limit = max(
-            max_results * self.MATURING_SCAN_LIMIT_MULTIPLIER,
-            self.MATURING_SCAN_MINIMUM,
-        )
+        scan_limit = self.BALLOON_SCAN_TARGET
         scanned = 0
-        maturity_min, maturity_cutoff = self._balloon_maturity_window()
 
         try:
             page = self.new_page()
@@ -1859,9 +1848,28 @@ class SarasotaScraper(BaseScraper):
                     if not instrument_number or instrument_number in seen_instruments:
                         continue
                     seen_instruments.add(instrument_number)
+                    image_url = row.get("image_url", "").strip()
+                    if image_url:
+                        img_page = None
+                        try:
+                            img_page = self._browser.new_context().new_page()
+                            img_page.set_default_timeout(15_000)
+                            img_page.goto(image_url, wait_until="load", timeout=15_000)
+                        except Exception as exc:
+                            logger.debug(
+                                "Sarasota balloon: view-image open failed for %s: %s",
+                                instrument_number,
+                                repr(exc),
+                            )
+                        finally:
+                            if img_page is not None:
+                                try:
+                                    img_page.context.close()
+                                except Exception:
+                                    pass
 
                     pdf_bytes = self._download_clerk_pdf(
-                        image_url=row.get("image_url", ""),
+                        image_url=image_url,
                         instrument_number=instrument_number,
                     )
                     if not pdf_bytes:
@@ -1887,8 +1895,7 @@ class SarasotaScraper(BaseScraper):
                     maturity_dt = _parse_date_flexible(terms.get("maturity_date", ""))
                     if not maturity_dt:
                         continue
-                    maturity_date = maturity_dt.date()
-                    if not (maturity_min <= maturity_date <= maturity_cutoff):
+                    if maturity_dt.year not in (2026, 2027):
                         continue
 
                     borrower_name = terms.get("borrower_name", "").strip() or row.get("grantee", "")
@@ -1904,7 +1911,7 @@ class SarasotaScraper(BaseScraper):
                         lead_type=LeadType.BALLOON_PROSPECTS.value,
                         instrument_number=instrument_number,
                         lead_source="Sarasota Official Records + OCR",
-                        notes="OCR-confirmed near-term maturity from Sarasota recorded mortgage",
+                        notes="OCR-confirmed maturity in 2026 or 2027 from Sarasota recorded mortgage",
                     )
                     record = self._apply_clerk_pdf_terms(record, row, terms)
                     record = self._enrich_record_from_pa_owner_search(record, borrower_name)
@@ -1950,16 +1957,12 @@ class SarasotaScraper(BaseScraper):
         """
         Sarasota-only targeted preset:
         commercial property, no current exemption, personal borrower,
-        8%+ note rate, and balloon-style maturity within 6 months.
+        and balloon-style maturity in 2026-2027.
         """
         records: List[PropertyRecord] = []
         seen_instruments: set[str] = set()
-        scan_limit = max(
-            max_results * self.MATURING_SCAN_LIMIT_MULTIPLIER,
-            self.MATURING_SCAN_MINIMUM,
-        )
+        scan_limit = self.BALLOON_SCAN_TARGET
         scanned = 0
-        maturity_min, maturity_cutoff = self._balloon_maturity_window()
 
         try:
             page = self.new_page()
@@ -2009,9 +2012,28 @@ class SarasotaScraper(BaseScraper):
                     if not instrument_number or instrument_number in seen_instruments:
                         continue
                     seen_instruments.add(instrument_number)
+                    image_url = row.get("image_url", "").strip()
+                    if image_url:
+                        img_page = None
+                        try:
+                            img_page = self._browser.new_context().new_page()
+                            img_page.set_default_timeout(15_000)
+                            img_page.goto(image_url, wait_until="load", timeout=15_000)
+                        except Exception as exc:
+                            logger.debug(
+                                "Sarasota balloon: view-image open failed for %s: %s",
+                                instrument_number,
+                                repr(exc),
+                            )
+                        finally:
+                            if img_page is not None:
+                                try:
+                                    img_page.context.close()
+                                except Exception:
+                                    pass
 
                     pdf_bytes = self._download_clerk_pdf(
-                        image_url=row.get("image_url", ""),
+                        image_url=image_url,
                         instrument_number=instrument_number,
                     )
                     if not pdf_bytes:
@@ -2034,16 +2056,11 @@ class SarasotaScraper(BaseScraper):
                     maturity_dt = _parse_date_flexible(terms.get("maturity_date", ""))
                     if not maturity_dt:
                         continue
-                    maturity_date = maturity_dt.date()
-                    if not (maturity_min <= maturity_date <= maturity_cutoff):
+                    if maturity_dt.year not in (2026, 2027):
                         continue
 
                     borrower_name = terms.get("borrower_name", "").strip() or row.get("grantee", "")
                     if not borrower_name or not self._is_likely_personal_name(borrower_name):
-                        continue
-
-                    interest_rate = self._parse_percent(terms.get("interest_rate", ""))
-                    if interest_rate < self.TARGETED_MIN_INTEREST_RATE:
                         continue
 
                     has_balloon_signal, balloon_reason = self._has_balloon_signal(
@@ -2066,8 +2083,8 @@ class SarasotaScraper(BaseScraper):
                         lead_source="Sarasota Official Records + OCR",
                         notes=(
                             "Targeted Sarasota client profile: personal borrower, "
-                            "commercial property, no current exemption, 8%+ note rate, "
-                            "balloon-style maturity within 6 months"
+                            "commercial property, no current exemption, "
+                            "balloon-style maturity in 2026 or 2027"
                         ),
                     )
                     record = self._apply_clerk_pdf_terms(record, row, terms)
@@ -2096,7 +2113,6 @@ class SarasotaScraper(BaseScraper):
                     if balloon_balance > 0:
                         note_bits.append(f"Balloon Balance: ${balloon_balance:,.0f}")
                     note_bits.append(f"Current exemptions: ${record.current_exemptions or '0'}")
-                    note_bits.append(f"Interest threshold met: {terms.get('interest_rate', '')}")
                     commercial_borrower = self._is_commercial_borrower_name(borrower_name)
                     note_bits.append(
                         f"Commercial Borrower: {'True' if commercial_borrower else 'False'}"
@@ -2119,7 +2135,7 @@ class SarasotaScraper(BaseScraper):
         return records
 
     def _fetch_balloon_prospects(self, max_results: int) -> List[PropertyRecord]:
-        """Return the union of Sarasota balloon workflows."""
+        """Return the union of Sarasota balloon workflows targeting maturities in 2026-2027."""
         merged: List[PropertyRecord] = []
         seen: Set[tuple[str, ...]] = set()
 

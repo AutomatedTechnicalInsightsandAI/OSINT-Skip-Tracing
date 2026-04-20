@@ -4,7 +4,7 @@ Targeted tests for Sarasota result parsing and clerk PDF enrichment hooks.
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import pytest
 
@@ -253,7 +253,7 @@ def test_extract_balloon_balance_from_sarasota_maturity_language():
 def test_fetch_maturing_commercial_debt_skips_below_min_balloon_balance(monkeypatch):
     scraper = SarasotaScraper(headless=True)
     page = _FakeLoopPage()
-    maturity_date = (datetime.now() + timedelta(days=30)).strftime("%m/%d/%Y")
+    maturity_date = "04/01/2026"
 
     monkeypatch.setattr(scraper, "MATURING_SEARCH_YEARS", (2021,))
     monkeypatch.setattr(scraper, "new_page", lambda: page)
@@ -301,7 +301,7 @@ def test_fetch_maturing_commercial_debt_skips_below_min_balloon_balance(monkeypa
 def test_fetch_personal_commercial_balloon_client_adds_balloon_balance_note(monkeypatch):
     scraper = SarasotaScraper(headless=True)
     page = _FakeLoopPage()
-    maturity_date = (datetime.now() + timedelta(days=120)).strftime("%m/%d/%Y")
+    maturity_date = "06/15/2027"
 
     monkeypatch.setattr(scraper, "MATURING_SEARCH_YEARS", (2021,))
     monkeypatch.setattr(scraper, "new_page", lambda: page)
@@ -327,7 +327,7 @@ def test_fetch_personal_commercial_balloon_client_adds_balloon_balance_note(monk
         lambda _pdf: {
             "borrower_name": "LISA K SNYDER",
             "maturity_date": maturity_date,
-            "interest_rate": "8.50%",
+            "interest_rate": "3.25%",
             "pdf_text": (
                 "BALLOON PURCHASE MONEY MORTGAGE. THE FINAL PRINCIPAL PAYMENT OR THE "
                 "PRINCIPAL BALANCE DUE UPON MATURITY IS $180,000.00."
@@ -417,6 +417,41 @@ class _FakeLoopPage:
         self.goto_calls.append((url, kwargs))
 
 
+class _FakeImagePage:
+    def __init__(self, context):
+        self.context = context
+        self.default_timeouts = []
+        self.goto_calls = []
+
+    def set_default_timeout(self, timeout: int):
+        self.default_timeouts.append(timeout)
+
+    def goto(self, url: str, **kwargs):
+        self.goto_calls.append((url, kwargs))
+
+
+class _FakeImageContext:
+    def __init__(self):
+        self.closed = False
+        self.page = _FakeImagePage(self)
+
+    def new_page(self):
+        return self.page
+
+    def close(self):
+        self.closed = True
+
+
+class _FakeImageBrowser:
+    def __init__(self):
+        self.contexts: list[_FakeImageContext] = []
+
+    def new_context(self):
+        context = _FakeImageContext()
+        self.contexts.append(context)
+        return context
+
+
 @pytest.mark.parametrize(
     "method_name",
     [
@@ -459,10 +494,60 @@ def test_balloon_flows_skip_full_extraction_when_first_page_has_no_signal(monkey
     assert page.context.closed is True
 
 
-def test_fetch_balloon_balance_leads_uses_3_to_6_month_window_and_populates_balance(monkeypatch):
+@pytest.mark.parametrize(
+    "method_name",
+    [
+        "_fetch_balloon_balance_leads",
+        "_fetch_maturing_commercial_debt",
+        "_fetch_sarasota_personal_commercial_balloon_clients",
+    ],
+)
+def test_balloon_flows_open_view_image_in_throwaway_context(monkeypatch, method_name):
     scraper = SarasotaScraper(headless=True)
     page = _FakeLoopPage()
-    maturity_date = (datetime.now() + timedelta(days=120)).strftime("%m/%d/%Y")
+    image_browser = _FakeImageBrowser()
+    scraper._browser = image_browser
+
+    monkeypatch.setattr(scraper, "MATURING_SEARCH_YEARS", (2021,))
+    monkeypatch.setattr(scraper, "new_page", lambda: page)
+    monkeypatch.setattr(scraper, "_search_official_records", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        scraper,
+        "_parse_results",
+        lambda _page: [
+            {
+                "instrument_number": "2021000009",
+                "image_url": "https://secure.sarasotaclerk.com/viewTiff.aspx?intrnum=2021000009",
+                "instrument_type": "MORTGAGE",
+                "rec_date": "04/01/2021",
+                "grantee": "SUNCOAST PARTNERS LLC",
+            }
+        ],
+    )
+    monkeypatch.setattr(scraper, "_download_clerk_pdf", lambda **_kwargs: b"%PDF")
+    monkeypatch.setattr("scrapers.sarasota_scraper.is_balloon_mortgage_first_page", lambda _pdf: False)
+    monkeypatch.setattr(
+        scraper,
+        "_extract_mortgage_pdf_terms",
+        lambda _pdf: (_ for _ in ()).throw(AssertionError("full extraction should be skipped")),
+    )
+
+    records = getattr(scraper, method_name)(max_results=5)
+
+    assert records == []
+    assert page.goto_calls == []
+    assert len(image_browser.contexts) == 1
+    image_ctx = image_browser.contexts[0]
+    assert image_ctx.page.default_timeouts == [15_000]
+    assert image_ctx.page.goto_calls[0][0].endswith("intrnum=2021000009")
+    assert image_ctx.closed is True
+    assert page.context.closed is True
+
+
+def test_fetch_balloon_balance_leads_filters_for_2026_or_2027_and_populates_balance(monkeypatch):
+    scraper = SarasotaScraper(headless=True)
+    page = _FakeLoopPage()
+    maturity_date = "04/01/2027"
 
     monkeypatch.setattr(scraper, "MATURING_SEARCH_YEARS", (2021,))
     monkeypatch.setattr(scraper, "new_page", lambda: page)
@@ -502,7 +587,50 @@ def test_fetch_balloon_balance_leads_uses_3_to_6_month_window_and_populates_bala
     assert len(records) == 1
     assert records[0].balloon_balance == "280000"
     assert records[0].instrument_number == "2021007957"
-    assert page.goto_calls[0][0].endswith("intrnum=2021007957")
+    assert page.goto_calls == []
+    assert page.context.closed is True
+
+
+def test_fetch_balloon_balance_leads_skips_non_2026_2027_maturity(monkeypatch):
+    scraper = SarasotaScraper(headless=True)
+    page = _FakeLoopPage()
+
+    monkeypatch.setattr(scraper, "MATURING_SEARCH_YEARS", (2021,))
+    monkeypatch.setattr(scraper, "new_page", lambda: page)
+    monkeypatch.setattr(scraper, "_search_official_records", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        scraper,
+        "_parse_results",
+        lambda _page: [
+            {
+                "instrument_number": "2021007958",
+                "image_url": "https://secure.sarasotaclerk.com/viewTiff.aspx?intrnum=2021007958",
+                "instrument_type": "MORTGAGE",
+                "rec_date": "04/01/2021",
+                "grantee": "AMY M PINTUS",
+            }
+        ],
+    )
+    monkeypatch.setattr(scraper, "_download_clerk_pdf", lambda **_kwargs: b"%PDF")
+    monkeypatch.setattr("scrapers.sarasota_scraper.is_balloon_mortgage_first_page", lambda _pdf: True)
+    monkeypatch.setattr(
+        scraper,
+        "_extract_mortgage_pdf_terms",
+        lambda _pdf: {
+            "instrument_number": "2021007958",
+            "borrower_name": "AMY M PINTUS",
+            "maturity_date": "04/01/2028",
+            "pdf_text": (
+                "THIS IS A BALLOON MORTGAGE AND THE FINAL PRINCIPAL PAYMENT OR THE "
+                "PRINCIPAL BALANCE DUE UPON MATURITY IS $280,000.00"
+            ),
+        },
+    )
+    monkeypatch.setattr(scraper, "_enrich_record_from_pa_owner_search", lambda record, _name: record)
+
+    records = scraper._fetch_balloon_balance_leads(max_results=5)
+
+    assert records == []
     assert page.context.closed is True
 
 
@@ -541,7 +669,7 @@ def test_balloon_flows_reopen_page_after_target_closed(monkeypatch):
 def test_fetch_maturing_commercial_debt_adds_commercial_borrower_flag(monkeypatch):
     scraper = SarasotaScraper(headless=True)
     page = _FakeLoopPage()
-    maturity_dt = datetime.now() + timedelta(days=120)
+    maturity_dt = datetime(2027, 4, 18)
     day = maturity_dt.day
     suffix = "th" if 11 <= day % 100 <= 13 else {1: "st", 2: "nd", 3: "rd"}.get(day % 10, "th")
     maturity_date = f"to be due by {day}{suffix} day of {maturity_dt.strftime('%B, %Y')} (Maturity Date)"
