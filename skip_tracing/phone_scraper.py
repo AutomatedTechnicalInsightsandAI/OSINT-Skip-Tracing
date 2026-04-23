@@ -230,7 +230,11 @@ class PhoneScraper:
 
     @staticmethod
     def _parse_city_state(address: str) -> tuple[str, str]:
-        """Best-effort city/state extraction from a US mailing address string."""
+        """Best-effort city/state extraction from a US mailing address string.
+
+        Expected format: "123 MAIN ST, MIAMI, FL 33101"
+        Returns empty strings for any component that cannot be determined.
+        """
         # Typical format: "123 MAIN ST, MIAMI, FL 33101"
         parts = [p.strip() for p in address.split(",")]
         city = parts[1] if len(parts) >= 2 else ""

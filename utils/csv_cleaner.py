@@ -36,7 +36,7 @@ _ADDRESS_CANDIDATES = [
 ]
 
 # ---------------------------------------------------------------------------
-# LLC suffix normalisation map  (all caps → canonical)
+# LLC suffix normalization map  (all caps → canonical)
 # ---------------------------------------------------------------------------
 _LLC_SUFFIXES = re.compile(
     r"\b(LLC|L\.L\.C\.?|L\.C\.?|LTD|INC\.?|CORP\.?|CO\.?)\b",
