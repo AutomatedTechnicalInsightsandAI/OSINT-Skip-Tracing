@@ -28,11 +28,16 @@ logger = logging.getLogger(__name__)
 _NAME_CANDIDATES = [
     "owner name", "owner", "name", "grantor", "taxpayer", "llc name",
     "owner 1", "owner1", "primary owner", "mailing name",
+    "owner name first last", "certified owner name", "owner full name",
+    "owner name last first",
 ]
 
 _ADDRESS_CANDIDATES = [
     "mailing address", "mail address", "mailing addr", "address", "addr",
     "mail addr", "owner address", "correspondence address", "contact address",
+    "owner add 1", "owner add", "owner add1",
+    "mail add 1", "mail add", "mailing add 1",
+    "property address", "situs address",
 ]
 
 # ---------------------------------------------------------------------------
@@ -143,17 +148,18 @@ class CSVCleaner:
             if low in candidates:
                 return col
 
-        # Fuzzy fallback
-        hits = fuzz_process.extractOne(
-            " ".join(candidates),
-            list(col_lower.values()),
-            score_cutoff=self.fuzzy_threshold,
-        )
-        if hits:
-            matched_lower = hits[0]
-            for col, low in col_lower.items():
-                if low == matched_lower:
-                    return col
+        # Try each candidate individually against all columns at once
+        col_names = list(col_lower.values())
+        best_score = 0
+        best_col = None
+        for candidate in candidates:
+            result = fuzz_process.extractOne(candidate, col_names, score_cutoff=self.fuzzy_threshold)
+            if result and result[1] > best_score:
+                best_score = result[1]
+                best_col = next(col for col, low in col_lower.items() if low == result[0])
+
+        if best_col:
+            return best_col
 
         logger.warning("Could not detect %s column in: %s", label, columns)
         return None
