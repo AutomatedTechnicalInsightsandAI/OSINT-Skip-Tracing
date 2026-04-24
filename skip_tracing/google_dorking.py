@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 try:
     import googlesearch  # noqa: F401
+    from googlesearch import search as google_search
     _GOOGLESEARCH_AVAILABLE = True
 except ImportError:
     _GOOGLESEARCH_AVAILABLE = False
@@ -189,8 +190,6 @@ class GoogleDorker:
             )
 
         try:
-            from googlesearch import search as google_search  # noqa: PLC0415
-
             urls = list(
                 google_search(
                     query,

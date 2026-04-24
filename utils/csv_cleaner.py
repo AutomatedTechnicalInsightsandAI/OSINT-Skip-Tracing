@@ -148,15 +148,15 @@ class CSVCleaner:
             if low in candidates:
                 return col
 
-        # Try each candidate individually against each column
+        # Try each candidate individually against all columns at once
+        col_names = list(col_lower.values())
         best_score = 0
         best_col = None
         for candidate in candidates:
-            for col, low in col_lower.items():
-                result = fuzz_process.extractOne(candidate, [low], score_cutoff=self.fuzzy_threshold)
-                if result and result[1] > best_score:
-                    best_score = result[1]
-                    best_col = col
+            result = fuzz_process.extractOne(candidate, col_names, score_cutoff=self.fuzzy_threshold)
+            if result and result[1] > best_score:
+                best_score = result[1]
+                best_col = next(col for col, low in col_lower.items() if low == result[0])
 
         if best_col:
             return best_col
