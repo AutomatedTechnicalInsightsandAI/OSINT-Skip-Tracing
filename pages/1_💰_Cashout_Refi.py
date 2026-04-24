@@ -11,6 +11,7 @@ from scrapers.base_scraper import LeadType
 from utils.lead_app_utils import (
     LEAD_TYPE_HELP,
     render_county_sidebar,
+    render_download_leads_so_far,
     render_metrics,
     render_results_table,
     run_scrapers,
@@ -66,8 +67,17 @@ def main():
 
         if "cashout_results_df" not in st.session_state:
             st.session_state["cashout_results_df"] = pd.DataFrame()
+        if "cashout_partial_df" not in st.session_state:
+            st.session_state["cashout_partial_df"] = pd.DataFrame()
         if "cashout_saved_csv_path" not in st.session_state:
             st.session_state["cashout_saved_csv_path"] = ""
+
+        render_download_leads_so_far(
+            results_key="cashout_results_df",
+            partial_key="cashout_partial_df",
+            filename_prefix="cashout_refi",
+            widget_key="cashout_download_so_far_top",
+        )
 
         if generate:
             run_config = {**config, "lead_type": lead_type}
@@ -96,6 +106,12 @@ def main():
                 st.caption(f"Saved to `{saved_csv_path}`")
             render_metrics(df)
             render_results_table(df)
+            render_download_leads_so_far(
+                results_key="cashout_results_df",
+                partial_key="cashout_partial_df",
+                filename_prefix="cashout_refi",
+                widget_key="cashout_download_so_far_bottom",
+            )
 
     df = st.session_state.get("cashout_results_df", pd.DataFrame())
 

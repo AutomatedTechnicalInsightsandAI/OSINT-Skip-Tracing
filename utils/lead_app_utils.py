@@ -70,17 +70,107 @@ OUTREACH_PRIORITY_COLUMNS = [
 ]
 
 
+def _lead_state_meta(lead_type: LeadType) -> dict[str, str]:
+    if lead_type == LeadType.BALLOON_PROSPECTS:
+        return {
+            "results_key": "balloon_results_df",
+            "partial_key": "balloon_partial_df",
+            "saved_csv_key": "balloon_saved_csv_path",
+            "label": "balloon_balance",
+        }
+    if lead_type == LeadType.CASHOUT_REFI:
+        return {
+            "results_key": "cashout_results_df",
+            "partial_key": "cashout_partial_df",
+            "saved_csv_key": "cashout_saved_csv_path",
+            "label": "cashout_refi",
+        }
+    if lead_type == LeadType.TRUST_REFI:
+        return {
+            "results_key": "trust_results_df",
+            "partial_key": "trust_partial_df",
+            "saved_csv_key": "trust_saved_csv_path",
+            "label": "trust_refi",
+        }
+    safe_name = lead_type.name.lower()
+    return {
+        "results_key": f"{safe_name}_results_df",
+        "partial_key": f"{safe_name}_partial_df",
+        "saved_csv_key": f"{safe_name}_saved_csv_path",
+        "label": safe_name,
+    }
+
+
+def get_results_so_far_df(results_key: str, partial_key: str) -> pd.DataFrame:
+    """Return the best available in-memory DataFrame for incremental download."""
+    results_df = st.session_state.get(results_key, pd.DataFrame())
+    partial_df = st.session_state.get(partial_key, pd.DataFrame())
+    if isinstance(results_df, pd.DataFrame) and not results_df.empty:
+        return results_df
+    if isinstance(partial_df, pd.DataFrame) and not partial_df.empty:
+        return partial_df
+    return pd.DataFrame()
+
+
+def render_download_leads_so_far(
+    *,
+    results_key: str,
+    partial_key: str,
+    filename_prefix: str,
+    widget_key: str,
+) -> None:
+    """Render a live CSV download control for whatever results currently exist."""
+    df = get_results_so_far_df(results_key, partial_key)
+    if df.empty:
+        return
+
+    lead_count = len(df.index)
+    count_column, button_column = st.columns([2, 3])
+    with count_column:
+        st.caption(f"{lead_count} leads found so far")
+    with button_column:
+        st.download_button(
+            label="⬇️ Download Leads So Far",
+            data=CSVExporter.to_bytes(df),
+            file_name=f"{filename_prefix}_partial_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+            mime="text/csv",
+            type="secondary",
+            width="content",
+            key=widget_key,
+        )
+
+
+def _records_to_dataframe(records: list) -> pd.DataFrame:
+    rows = []
+    for record in records:
+        if isinstance(record, dict):
+            rows.append(record)
+        elif hasattr(record, "to_dict"):
+            rows.append(record.to_dict())
+        elif hasattr(record, "__dict__"):
+            rows.append(dict(record.__dict__))
+        else:
+            logger.warning("Skipping unhandled record type in partial results: %s", type(record))
+    return pd.DataFrame(rows)
+
+
 def run_scrapers(config: dict) -> pd.DataFrame:
     """Execute scrapers for all selected counties and return merged DataFrame."""
     counties: list[str] = config["counties"]
     lead_type: LeadType = config["lead_type"]
     max_results: int = config["max_results"]
     headless: bool = config["headless"]
+    state_meta = _lead_state_meta(lead_type)
+    results_key = state_meta["results_key"]
+    partial_key = state_meta["partial_key"]
+    saved_csv_key = state_meta["saved_csv_key"]
+    label = state_meta["label"]
 
     if not counties:
         st.warning("Please select at least one county in the sidebar.")
         return pd.DataFrame()
 
+    st.session_state[partial_key] = pd.DataFrame()
     all_records = []
     progress_bar = st.progress(0, text="Initializing scrapers...")
     status = st.status("Running scrapers...", expanded=True)
@@ -93,6 +183,23 @@ def run_scrapers(config: dict) -> pd.DataFrame:
                 records = scraper.fetch_records(lead_type, max_results=max_results)
                 all_records.extend(records)
                 status.write(f"{county_name}: found **{len(records)}** record(s).")
+                if records:
+                    county_df = _records_to_dataframe(records)
+                    partial_df = st.session_state[partial_key]
+                    updated_partial_df = pd.concat(
+                        [partial_df, county_df],
+                        ignore_index=True,
+                    )
+                    st.session_state[partial_key] = updated_partial_df
+                    # Keep both keys updated so page-level UI can always read either
+                    # "final results" or "partial results" consistently mid-run.
+                    st.session_state[results_key] = updated_partial_df
+                    partial_path = save_results_csv(
+                        updated_partial_df,
+                        lead_type,
+                        label=f"{label}_partial",
+                    )
+                    st.session_state[saved_csv_key] = str(partial_path)
         except Exception as exc:
             status.write(f"{county_name} scraper failed: `{exc}`")
             logger.error("Scraper %s failed: %s", county_name, traceback.format_exc())
@@ -117,10 +224,11 @@ def run_scrapers(config: dict) -> pd.DataFrame:
         enable_skip_tracing=config["skip_tracing"],
         max_skip_trace_per_batch=20,
     )
-
     with st.spinner("Processing and enriching data..."):
         df = processor.process(all_records)
 
+    st.session_state[partial_key] = df
+    st.session_state[results_key] = df
     return df
 
 

@@ -6,6 +6,7 @@ import streamlit as st
 from scrapers.base_scraper import LeadType
 from utils.lead_app_utils import (
     LEAD_TYPE_HELP,
+    render_download_leads_so_far,
     render_county_sidebar,
     render_metrics,
     render_results_table,
@@ -50,8 +51,17 @@ def main():
 
     if "balloon_results_df" not in st.session_state:
         st.session_state["balloon_results_df"] = pd.DataFrame()
+    if "balloon_partial_df" not in st.session_state:
+        st.session_state["balloon_partial_df"] = pd.DataFrame()
     if "balloon_saved_csv_path" not in st.session_state:
         st.session_state["balloon_saved_csv_path"] = ""
+
+    render_download_leads_so_far(
+        results_key="balloon_results_df",
+        partial_key="balloon_partial_df",
+        filename_prefix="balloon_balance",
+        widget_key="balloon_download_so_far_top",
+    )
 
     if generate:
         run_config = {**config, "lead_type": lead_type}
@@ -84,6 +94,12 @@ def main():
         for i, (strategy, count) in enumerate(strategy_counts.items()):
             s_cols[i % 4].metric(strategy[:35], int(count))
     render_results_table(df)
+    render_download_leads_so_far(
+        results_key="balloon_results_df",
+        partial_key="balloon_partial_df",
+        filename_prefix="balloon_balance",
+        widget_key="balloon_download_so_far_bottom",
+    )
 
 
 if __name__ == "__main__":

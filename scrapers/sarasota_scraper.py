@@ -22,6 +22,7 @@ from pathlib import Path
 from typing import List, Set
 from urllib.parse import urljoin, urlparse, parse_qs
 import requests
+from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 
 from scrapers.base_scraper import (
     BaseScraper,
@@ -743,14 +744,22 @@ class SarasotaScraper(BaseScraper):
         }
 
     def _open_and_close_view_image(self, image_url: str, instrument_number: str) -> None:
-        """Open a clerk View Image URL in a throwaway context and close immediately."""
+        """Open a clerk View Image URL in a throwaway context, wait for registration, and close."""
         if not image_url:
             return
         img_page = None
         try:
             img_page = self._browser.new_context().new_page()
-            img_page.set_default_timeout(15_000)
-            img_page.goto(image_url, wait_until="load", timeout=15_000)
+            img_page.set_default_timeout(20_000)
+            img_page.goto(image_url, wait_until="load", timeout=20_000)
+            try:
+                img_page.wait_for_selector("img, embed, object, iframe", timeout=5_000)
+            except PlaywrightTimeoutError:
+                logger.debug(
+                    "Sarasota balloon: viewer element wait timed out for %s",
+                    instrument_number,
+                )
+            img_page.wait_for_timeout(3_000)
         except Exception as exc:
             logger.debug(
                 "Sarasota balloon: view-image open failed for %s: %s",
@@ -1409,24 +1418,7 @@ class SarasotaScraper(BaseScraper):
                     seen_instruments.add(instrument_number)
 
                     image_url = row.get("image_url", "").strip()
-                    if image_url:
-                        img_page = None
-                        try:
-                            img_page = self._browser.new_context().new_page()
-                            img_page.set_default_timeout(15_000)
-                            img_page.goto(image_url, wait_until="load", timeout=15_000)
-                        except Exception as exc:
-                            logger.debug(
-                                "Sarasota balloon: view-image open failed for %s: %s",
-                                instrument_number,
-                                repr(exc),
-                            )
-                        finally:
-                            if img_page is not None:
-                                try:
-                                    img_page.context.close()
-                                except Exception:
-                                    pass
+                    self._open_and_close_view_image(image_url, instrument_number)
 
                     pdf_bytes = self._download_clerk_pdf(
                         image_url=image_url,
@@ -2053,24 +2045,7 @@ class SarasotaScraper(BaseScraper):
                         continue
                     seen_instruments.add(instrument_number)
                     image_url = row.get("image_url", "").strip()
-                    if image_url:
-                        img_page = None
-                        try:
-                            img_page = self._browser.new_context().new_page()
-                            img_page.set_default_timeout(15_000)
-                            img_page.goto(image_url, wait_until="load", timeout=15_000)
-                        except Exception as exc:
-                            logger.debug(
-                                "Sarasota balloon: view-image open failed for %s: %s",
-                                instrument_number,
-                                repr(exc),
-                            )
-                        finally:
-                            if img_page is not None:
-                                try:
-                                    img_page.context.close()
-                                except Exception:
-                                    pass
+                    self._open_and_close_view_image(image_url, instrument_number)
 
                     pdf_bytes = self._download_clerk_pdf(
                         image_url=image_url,
@@ -2217,24 +2192,7 @@ class SarasotaScraper(BaseScraper):
                         continue
                     seen_instruments.add(instrument_number)
                     image_url = row.get("image_url", "").strip()
-                    if image_url:
-                        img_page = None
-                        try:
-                            img_page = self._browser.new_context().new_page()
-                            img_page.set_default_timeout(15_000)
-                            img_page.goto(image_url, wait_until="load", timeout=15_000)
-                        except Exception as exc:
-                            logger.debug(
-                                "Sarasota balloon: view-image open failed for %s: %s",
-                                instrument_number,
-                                repr(exc),
-                            )
-                        finally:
-                            if img_page is not None:
-                                try:
-                                    img_page.context.close()
-                                except Exception:
-                                    pass
+                    self._open_and_close_view_image(image_url, instrument_number)
 
                     pdf_bytes = self._download_clerk_pdf(
                         image_url=image_url,

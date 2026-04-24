@@ -436,12 +436,20 @@ class _FakeImagePage:
         self.context = context
         self.default_timeouts = []
         self.goto_calls = []
+        self.selector_wait_calls = []
+        self.timeout_wait_calls = []
 
     def set_default_timeout(self, timeout: int):
         self.default_timeouts.append(timeout)
 
     def goto(self, url: str, **kwargs):
         self.goto_calls.append((url, kwargs))
+
+    def wait_for_selector(self, selector: str, **kwargs):
+        self.selector_wait_calls.append((selector, kwargs))
+
+    def wait_for_timeout(self, timeout: int):
+        self.timeout_wait_calls.append(timeout)
 
 
 class _FakeImageContext:
@@ -552,8 +560,12 @@ def test_balloon_flows_open_view_image_in_throwaway_context(monkeypatch, method_
     assert page.goto_calls == []
     assert len(image_browser.contexts) == 1
     image_ctx = image_browser.contexts[0]
-    assert image_ctx.page.default_timeouts == [15_000]
+    assert image_ctx.page.default_timeouts == [20_000]
     assert image_ctx.page.goto_calls[0][0].endswith("intrnum=2021000009")
+    assert image_ctx.page.selector_wait_calls == [
+        ("img, embed, object, iframe", {"timeout": 5_000})
+    ]
+    assert image_ctx.page.timeout_wait_calls == [3_000]
     assert image_ctx.closed is True
     assert page.context.closed is True
 
