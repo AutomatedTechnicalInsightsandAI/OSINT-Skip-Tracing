@@ -24,6 +24,12 @@ from urllib.parse import urlparse
 
 logger = logging.getLogger(__name__)
 
+try:
+    import googlesearch  # noqa: F401
+    _GOOGLESEARCH_AVAILABLE = True
+except ImportError:
+    _GOOGLESEARCH_AVAILABLE = False
+
 # ---------------------------------------------------------------------------
 # Phone regex — matches US numbers in a wide variety of formats
 # ---------------------------------------------------------------------------
@@ -175,6 +181,11 @@ class PhoneScraper:
     def _run_query(self, query: str) -> tuple[list[str], bool]:
         phones: list[str] = []
         rate_limited = False
+
+        if not _GOOGLESEARCH_AVAILABLE:
+            raise RuntimeError(
+                "googlesearch-python is not installed. Run: pip install googlesearch-python"
+            )
 
         try:
             from googlesearch import search as google_search  # noqa: PLC0415

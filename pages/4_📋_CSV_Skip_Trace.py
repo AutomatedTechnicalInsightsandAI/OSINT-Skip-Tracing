@@ -23,6 +23,16 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+try:
+    import googlesearch  # noqa: F401
+except ImportError:
+    st.error(
+        "❌ Missing dependency: `googlesearch-python` is not installed.\n\n"
+        "Run this in PowerShell then restart Streamlit:\n"
+        "```\npip install googlesearch-python\n```"
+    )
+    st.stop()
+
 
 def _load_uploaded_file(uploaded_file) -> pd.DataFrame:
     """Read an uploaded CSV or Excel file into a DataFrame."""
@@ -202,6 +212,8 @@ def main():
     results: list[dict] = []
     progress_bar = st.progress(0)
     status_line = st.empty()
+    _any_rate_limited = False
+    _sample_queries: list[str] = []
 
     _rate_limit_msg = (
         "⚠️ Google rate-limited after **{n}** owners. "
@@ -218,13 +230,19 @@ def main():
 
             phone_result = phone_scraper.lookup(owner, address)
             if phone_result.get("rate_limited"):
+                _any_rate_limited = True
                 st.warning(_rate_limit_msg.format(n=i - 1))
                 break
 
             dork_result = dorker.search(owner)
             if dork_result.get("rate_limited"):
+                _any_rate_limited = True
                 st.warning(_rate_limit_msg.format(n=i - 1))
                 break
+
+            # Capture sample queries for the first owner only
+            if i == 1:
+                _sample_queries = dork_result.get("queries", [])
 
             results.append(
                 {
@@ -264,6 +282,42 @@ def main():
     m1.metric("Owners processed", total_rows)
     m2.metric("With phone numbers", phones_found)
     m3.metric("With emails", emails_found)
+
+    # ── Diagnostics (shown when 0 phones and 0 emails) ────────────────────────
+    if phones_found == 0 and emails_found == 0:
+        with st.expander("🔍 Diagnostics — why are results empty?", expanded=True):
+            try:
+                import googlesearch as _gs  # noqa: F401
+                st.success("✅ `googlesearch-python` is installed.")
+            except ImportError:
+                st.error(
+                    "❌ `googlesearch-python` is **not** installed. "
+                    "Run `pip install googlesearch-python` and restart Streamlit."
+                )
+
+            if _any_rate_limited:
+                st.warning(
+                    "⚠️ **Rate-limiting detected** — Google blocked the automated "
+                    "search session before results could be collected."
+                )
+            else:
+                st.info(
+                    "No rate-limiting was explicitly detected, but Google may still "
+                    "be silently returning empty results for automated queries."
+                )
+
+            if _sample_queries:
+                st.markdown("**Sample queries fired for the first owner:**")
+                for q in _sample_queries:
+                    st.code(q, language=None)
+            else:
+                st.info("No queries were recorded (the run may have been blocked immediately).")
+
+            st.info(
+                "💡 **Advice:** Google frequently blocks automated searches. "
+                "Try running a smaller batch (10–20 owners) or waiting 30 minutes "
+                "between runs. You can also try the run again at a different time of day."
+            )
 
     st.dataframe(results_df, use_container_width=True)
 
