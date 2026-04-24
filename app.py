@@ -34,7 +34,7 @@ def main():
     st.divider()
     st.subheader("Lead Generators")
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
         st.markdown("### 💰 Cash-Out Refi")
@@ -53,6 +53,13 @@ def main():
         st.warning("🔧 In Tuning")
         with st.expander("About this generator", expanded=False):
             st.markdown(LEAD_TYPE_HELP[LeadType.TRUST_REFI])
+
+    with col4:
+        st.markdown("### 📋 CSV Skip-Trace")
+        st.success("✅ Production")
+        st.markdown(
+            "Upload a CSV of owner names to batch skip-trace for phones and emails."
+        )
 
     st.info(
         "This home page does not run scrapers. Open one of the dedicated pages "
