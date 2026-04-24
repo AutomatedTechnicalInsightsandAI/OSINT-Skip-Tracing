@@ -32,6 +32,7 @@ class LeadType(str, Enum):
     CASHOUT_REFI = "Recent Purchase Cash-Out Refi Prospects"  # ⚠️ DO NOT CHANGE
     BALLOON_PROSPECTS = "Commercial Balloon Prospects"
     TRUST_REFI = "Property Held in Trust Refi Prospects"
+    MORTGAGE_MOD = "Mortgage Mod Refi Prospects"
 
 
 @dataclass

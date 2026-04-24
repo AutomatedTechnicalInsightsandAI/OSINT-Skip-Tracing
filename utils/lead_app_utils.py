@@ -40,6 +40,13 @@ LEAD_TYPE_HELP = {
         "owner name or deed type. These owners often have high equity and respond well to "
         "privacy-focused outreach."
     ),
+    LeadType.MORTGAGE_MOD: (
+        "Mortgage modification agreements recorded at the Sarasota Clerk of Court "
+        "from **January 1, 2025 through today**. Each PDF is OCR-scanned to extract "
+        "the borrower name, modified principal, interest rate, maturity date, and "
+        "balloon/HELOC signals. These borrowers already had a modification — they "
+        "are prime candidates for a full refinance."
+    ),
 }
 
 OUTREACH_PRIORITY_COLUMNS = [

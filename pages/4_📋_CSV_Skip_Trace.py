@@ -99,7 +99,7 @@ def main():
         return
 
     st.subheader("Preview (first 5 rows)")
-    st.dataframe(raw_df.head(5), use_container_width=True)
+    st.dataframe(raw_df.head(5), width="stretch")
 
     cols = raw_df.columns.tolist()
 
@@ -265,7 +265,7 @@ def main():
     m2.metric("With phone numbers", phones_found)
     m3.metric("With emails", emails_found)
 
-    st.dataframe(results_df, use_container_width=True)
+    st.dataframe(results_df, width="stretch")
 
     # ── 7. Download button ────────────────────────────────────────────────────
     csv_bytes = results_df.to_csv(index=False).encode("utf-8")
