@@ -18,6 +18,10 @@ from PIL import Image
 
 PdfSource = Union[bytes, bytearray, str, Path]
 
+MAX_BORROWER_CONTEXT_CHARS = 1200
+MAX_ADDRESS_CAPTURE_CHARS = 250
+MAX_TRUST_CAPTURE_CHARS = 300
+
 
 @dataclass
 class PdfTextExtraction:
@@ -34,7 +38,10 @@ class MortgageDocumentInfo:
 
     instrument_number: str = ""
     borrower_name: str = ""
+    borrower_address: str = ""
     lender_name: str = ""
+    lender_address: str = ""
+    trust_name: str = ""
     credit_limit: str = ""
     interest_rate: str = ""
     maturity_date: str = ""
@@ -50,6 +57,9 @@ class ModAgreementInfo:
     """Structured terms pulled from a mortgage modification agreement PDF."""
 
     borrower_name: str = ""
+    borrower_address: str = ""
+    lender_address: str = ""
+    trust_name: str = ""
     property_address: str = ""
     instrument_number: str = ""
     modified_principal: str = ""
@@ -256,6 +266,9 @@ def extract_mod_agreement_info(
 
     info = ModAgreementInfo(
         borrower_name=mortgage_info.borrower_name,
+        borrower_address=mortgage_info.borrower_address,
+        lender_address=mortgage_info.lender_address,
+        trust_name=mortgage_info.trust_name,
         property_address=property_address,
         instrument_number=mortgage_info.instrument_number,
         modified_principal=modified_principal,
@@ -307,6 +320,53 @@ def parse_mortgage_document_info(text: str) -> MortgageDocumentInfo:
             [
                 r"['\"]?Lender['\"]?\s+is\s+(.+?)\.\s+Lender\s+is",
                 r"After\s+Recording\s+Return\s+To:\s*(.+?)\s+Document\s+Imaging",
+            ],
+            flattened,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    )
+
+    info.borrower_address = _clean_phrase(
+        _search_first(
+            [
+                rf"made\s+by\s+and\s+between[\s\S]{{0,{MAX_BORROWER_CONTEXT_CHARS}}}?whose\s+(?:post\s+office\s+)?address\s+is\s+([^.;\n]{{1,{MAX_ADDRESS_CAPTURE_CHARS}}}?)(?=,\s+and\s+)",
+                rf"Borrower[^\n]{{0,80}}?whose\s+(?:post\s+office\s+)?address\s+is\s+([^.;\n]{{1,{MAX_ADDRESS_CAPTURE_CHARS}}}?)(?=,\s*(?:and\s+|['\"]?Lender|$)|[.;\n])",
+            ],
+            flattened,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    )
+    info.lender_address = _clean_phrase(
+        _search_first(
+            [
+                rf"\(\s*['\"]?Lender['\"]?\s*\)\s*,?\s*whose\s+(?:post\s+office\s+)?address\s+is\s+([^.;\n]{{1,{MAX_ADDRESS_CAPTURE_CHARS}}}?)(?=[.;\n]|$)",
+                rf"Lender[^\n]{{0,80}}?whose\s+(?:post\s+office\s+)?address\s+is\s+([^.;\n]{{1,{MAX_ADDRESS_CAPTURE_CHARS}}}?)(?=[.;\n]|$)",
+            ],
+            flattened,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+    )
+
+    if not info.borrower_address or not info.lender_address:
+        address_matches = []
+        for match in re.findall(
+            rf"whose\s+(?:post\s+office\s+)?address\s+is\s+([^.;\n]{{1,{MAX_ADDRESS_CAPTURE_CHARS}}})(?=,\s*(?:and\s+|['\"]?\(?Lender|$)|[.;\n])",
+            flattened,
+            flags=re.IGNORECASE | re.DOTALL,
+        ):
+            cleaned = _clean_phrase(match)
+            if cleaned:
+                address_matches.append(cleaned)
+        if not info.borrower_address and address_matches:
+            info.borrower_address = address_matches[0]
+        if not info.lender_address and len(address_matches) > 1:
+            info.lender_address = address_matches[1]
+
+    info.trust_name = _clean_phrase(
+        _search_first(
+            [
+                rf"Trustees?\s+of\s+(?:the\s+)?([^()\n]{{1,{MAX_TRUST_CAPTURE_CHARS}}})\s*\(\s*['\"]?Lender['\"]?\s*\)",
+                rf"Trustees?\s+of\s+(?:the\s+)?([^,\n]{{1,{MAX_TRUST_CAPTURE_CHARS}}}\bTrust(?:\s+dated\s+[A-Za-z]+\s+\d{{1,2}},\s+\d{{4}})?)",
             ],
             flattened,
             flags=re.IGNORECASE | re.DOTALL,
