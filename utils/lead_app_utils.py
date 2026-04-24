@@ -40,6 +40,13 @@ LEAD_TYPE_HELP = {
         "owner name or deed type. These owners often have high equity and respond well to "
         "privacy-focused outreach."
     ),
+    LeadType.MORTGAGE_MOD: (
+        "Mortgage modification agreements recorded at the Sarasota Clerk of Court "
+        "from **January 1, 2025 through today**. Each PDF is OCR-scanned to extract "
+        "the borrower name, modified principal, interest rate, maturity date, and "
+        "balloon/HELOC signals. These borrowers already had a modification — they "
+        "are prime candidates for a full refinance."
+    ),
 }
 
 OUTREACH_PRIORITY_COLUMNS = [
@@ -91,6 +98,13 @@ def _lead_state_meta(lead_type: LeadType) -> dict[str, str]:
             "partial_key": "trust_partial_df",
             "saved_csv_key": "trust_saved_csv_path",
             "label": "trust_refi",
+        }
+    if lead_type == LeadType.MORTGAGE_MOD:
+        return {
+            "results_key": "mortgage_mod_results_df",
+            "partial_key": "mortgage_mod_partial_df",
+            "saved_csv_key": "mortgage_mod_saved_csv_path",
+            "label": "mortgage_mod_refi",
         }
     safe_name = lead_type.name.lower()
     return {

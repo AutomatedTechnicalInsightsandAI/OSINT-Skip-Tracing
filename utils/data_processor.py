@@ -287,6 +287,8 @@ class DataProcessor:
     def _pick_lead_strategy(row: pd.Series) -> str:
         if bool(row.get("Cash-Out Refi Candidate", False)):
             return LeadType.CASHOUT_REFI.value
+        if row.get("Lead Type", "") == LeadType.MORTGAGE_MOD.value:
+            return LeadType.MORTGAGE_MOD.value
         if row.get("Lead Type", "") == LeadType.BALLOON_PROSPECTS.value:
             return row.get("Lead Type", "")
         if bool(row.get("Maturing Loan Candidate", False)):
