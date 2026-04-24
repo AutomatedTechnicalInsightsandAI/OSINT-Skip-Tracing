@@ -15,6 +15,7 @@ from scrapers.base_scraper import LeadType, PropertyRecord
 from skip_tracing.google_dorking import GoogleDorker
 
 logger = logging.getLogger(__name__)
+CASHOUT_REFI_MAX_LTV = 0.70
 
 
 def classify_lead(row: dict) -> str:
@@ -44,6 +45,21 @@ def classify_lead(row: dict) -> str:
         return "Trust DSCR Candidate – Absentee Owner"
     if is_trust:
         return "Trust – Potential Equity Refi"
+    mtg_amt_at_purchase = str(row.get("Mtg Amt At Purchase", "")).replace(",", "").strip()
+    sale_price = str(row.get("Sale Price", "")).strip()
+    just_value = str(row.get("Just Value", "")).strip()
+    modified_principal = str(row.get("Modified Principal", "")).strip()
+    if mtg_amt_at_purchase == "0":
+        return "Cash-Out Refi Candidate – Equity Available"
+    try:
+        mod_principal_float = float((modified_principal or "0").replace(",", ""))
+        if mod_principal_float > 0:
+            for value_str in (sale_price, just_value):
+                value_float = float((value_str or "0").replace(",", ""))
+                if value_float > 0 and (mod_principal_float / value_float) < CASHOUT_REFI_MAX_LTV:
+                    return "Cash-Out Refi Candidate – Equity Available"
+    except (ValueError, ZeroDivisionError):
+        pass
     return "Mortgage Mod – Review for Refi"
 
 

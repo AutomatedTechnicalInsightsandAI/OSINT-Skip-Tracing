@@ -40,6 +40,7 @@ from utils.pdf_reader import (
 )
 
 logger = logging.getLogger(__name__)
+CASHOUT_REFI_MAX_LTV = 0.70
 
 
 class SarasotaScraper(BaseScraper):
@@ -1183,6 +1184,10 @@ class SarasotaScraper(BaseScraper):
         maturity_date: str,
         has_balloon_signal: bool,
         balloon_balance: float,
+        mtg_amt_at_purchase: str = "",
+        sale_price: str = "",
+        just_value: str = "",
+        modified_principal: str = "",
     ) -> str:
         trust_tokens = ["TRUST", "TTEE", "TRUSTEE", "LAND TRUST", "REVOCABLE", "LIVING TRUST"]
         owner_upper = (owner_name or "").upper()
@@ -1190,6 +1195,9 @@ class SarasotaScraper(BaseScraper):
         mail = " ".join((mailing_address or "").upper().replace(",", " ").split())
         is_trust = any(token in owner_upper for token in trust_tokens)
         is_absentee = bool(prop and mail and prop != mail)
+        mtg_amt_at_purchase_clean = (mtg_amt_at_purchase or "").replace(",", "").strip()
+        modified_principal_clean = (modified_principal or "").replace(",", "").strip()
+        property_values = tuple((value_str or "").replace(",", "").strip() for value_str in (sale_price, just_value))
 
         if is_heloc:
             return "HELOC – Review Credit Limit & Terms"
@@ -1199,6 +1207,17 @@ class SarasotaScraper(BaseScraper):
             return "Trust DSCR Candidate – Absentee Owner"
         if is_trust:
             return "Trust – Potential Equity Refi"
+        if mtg_amt_at_purchase_clean == "0":
+            return "Cash-Out Refi Candidate – Equity Available"
+        try:
+            mod_principal_float = float(modified_principal_clean or "0")
+            if mod_principal_float > 0:
+                for value_str in property_values:
+                    value_float = float(value_str or "0")
+                    if value_float > 0 and (mod_principal_float / value_float) < CASHOUT_REFI_MAX_LTV:
+                        return "Cash-Out Refi Candidate – Equity Available"
+        except (ValueError, ZeroDivisionError):
+            pass
         return "Mortgage Mod – Review for Refi"
 
     def _fetch_mortgage_mod_leads(self, max_results: int) -> List[PropertyRecord]:
@@ -1315,6 +1334,10 @@ class SarasotaScraper(BaseScraper):
                         maturity_date=record.maturity_date,
                         has_balloon_signal=mod_info.has_balloon_signal,
                         balloon_balance=mod_info.balloon_balance,
+                        mtg_amt_at_purchase=record.mtg_amt_at_purchase,
+                        sale_price=record.sale_price,
+                        just_value=record.just_value,
+                        modified_principal=mod_info.modified_principal,
                     )
                     records.append(record)
 
