@@ -190,59 +190,26 @@ def test_fetch_records_routes_balloon_prospects_union(monkeypatch):
     scraper = SarasotaScraper(headless=True)
     monkeypatch.setattr(
         scraper,
-        "_fetch_balloon_balance_leads",
+        "_fetch_balloon_prospects_v2",
         lambda max_results: [
             PropertyRecord(
                 owner_name="AMY M PINTUS",
                 county="Sarasota",
                 lead_type=LeadType.BALLOON_PROSPECTS.value,
                 instrument_number="2021007957",
-            )
-        ],
-    )
-    monkeypatch.setattr(
-        scraper,
-        "_fetch_maturing_commercial_debt",
-        lambda max_results: [
+            ),
             PropertyRecord(
                 owner_name="SUNCOAST OFFICE PARK LLC",
                 county="Sarasota",
                 lead_type=LeadType.BALLOON_PROSPECTS.value,
-            )
-        ],
-    )
-    monkeypatch.setattr(
-        scraper,
-        "_fetch_sarasota_personal_commercial_balloon_clients",
-        lambda max_results: [
-            PropertyRecord(
-                owner_name="LISA K SNYDER",
-                county="Sarasota",
-                lead_type=LeadType.BALLOON_PROSPECTS.value,
-            )
-        ],
-    )
-    monkeypatch.setattr(
-        scraper,
-        "_fetch_mortgage_mod_leads",
-        lambda max_results: [
-            PropertyRecord(
-                owner_name="SUNCOAST LIVING TRUST",
-                county="Sarasota",
-                lead_type=LeadType.BALLOON_PROSPECTS.value,
-                instrument_number="2021009999",
-                sales_strategy="Trust – Potential Equity Refi",
-            )
+            ),
         ],
     )
 
     records = scraper.fetch_records(LeadType.BALLOON_PROSPECTS, max_results=5)
 
-    assert len(records) == 4
-    assert records[0].lead_type == LeadType.BALLOON_PROSPECTS.value
-    assert records[1].lead_type == LeadType.BALLOON_PROSPECTS.value
-    assert records[2].lead_type == LeadType.BALLOON_PROSPECTS.value
-    assert records[3].lead_type == LeadType.BALLOON_PROSPECTS.value
+    assert len(records) == 2
+    assert all(r.lead_type == LeadType.BALLOON_PROSPECTS.value for r in records)
 
 
 def test_is_likely_personal_name_rejects_bank():
@@ -915,3 +882,244 @@ def test_fetch_mortgage_mod_leads_extracts_and_classifies(monkeypatch):
     assert records[0].trust_keywords == "TRUST"
     assert len(image_browser.contexts) == 1
     assert image_browser.contexts[0].closed is True
+
+
+# ------------------------------------------------------------------
+# New fast pipeline (v2) helper tests
+# ------------------------------------------------------------------
+
+def test_extract_borrower_from_name_cell_strips_lender_line():
+    scraper = SarasotaScraper(headless=True)
+    name_cell = "COAST FEDERAL SAVINGS\nHECHT LEONARD\nHECHT RHONA"
+    result = scraper._extract_borrower_from_name_cell(name_cell)
+    assert "HECHT LEONARD" in result
+    assert "HECHT RHONA" in result
+    assert "COAST" not in result
+
+
+def test_extract_borrower_from_name_cell_handles_semicolons():
+    scraper = SarasotaScraper(headless=True)
+    name_cell = "FIRST STATE BANK;SARASOTA BROADCASTING COMPANY"
+    result = scraper._extract_borrower_from_name_cell(name_cell)
+    assert "SARASOTA BROADCASTING COMPANY" in result
+    assert "FIRST STATE BANK" not in result
+
+
+def test_extract_borrower_from_name_cell_single_non_lender_line():
+    scraper = SarasotaScraper(headless=True)
+    name_cell = "MCGREGOR CHARLES W"
+    result = scraper._extract_borrower_from_name_cell(name_cell)
+    assert result == "MCGREGOR CHARLES W"
+
+
+def test_extract_borrower_from_name_cell_empty():
+    scraper = SarasotaScraper(headless=True)
+    assert scraper._extract_borrower_from_name_cell("") == ""
+    assert scraper._extract_borrower_from_name_cell(None) == ""
+
+
+def test_match_pa_row_exact_match():
+    scraper = SarasotaScraper(headless=True)
+    pa_lookup = {
+        "MCGREGOR CHARLES W": [{"Owner 1": "MCGREGOR CHARLES W", "Situs Address": "123 MAIN ST"}]
+    }
+    result = scraper._match_pa_row("MCGREGOR CHARLES W", pa_lookup)
+    assert result is not None
+    assert result["Situs Address"] == "123 MAIN ST"
+
+
+def test_match_pa_row_prefix_match():
+    scraper = SarasotaScraper(headless=True)
+    pa_lookup = {
+        "MCGREGOR CHARLES W": [{"Owner 1": "MCGREGOR CHARLES W", "Situs Address": "123 MAIN ST"}]
+    }
+    result = scraper._match_pa_row("MCGREGOR CHARLES", pa_lookup)
+    assert result is not None
+
+
+def test_match_pa_row_no_match():
+    scraper = SarasotaScraper(headless=True)
+    pa_lookup = {"SMITH JOHN": [{"Owner 1": "SMITH JOHN"}]}
+    result = scraper._match_pa_row("JONES MARY", pa_lookup)
+    assert result is None
+
+
+def test_match_pa_row_empty_borrower():
+    scraper = SarasotaScraper(headless=True)
+    assert scraper._match_pa_row("", {}) is None
+
+
+def test_pa_row_to_record_fields_extracts_all_fields():
+    pa_row = {
+        "Owner 1": "MCGREGOR CHARLES W",
+        "Owner 2": "MCGREGOR DORIS M",
+        "Owner 3": "",
+        "Situs Address": "100 PALM AVE",
+        "Mailing Address": "PO BOX 123",
+        "Account #": "0123456789",
+        "Just Value": "$450,000",
+        "Assessed Value": "$420,000",
+        "Taxable Value": "$400,000",
+        "Last Sale Amount": "$380,000",
+        "Last Sale Date": "06/15/2019",
+        "Year Built": "1985",
+        "Description": "Single Family",
+    }
+    fields = SarasotaScraper._pa_row_to_record_fields(pa_row)
+    assert fields["owner_name"] == "MCGREGOR CHARLES W & MCGREGOR DORIS M"
+    assert fields["property_address"] == "100 PALM AVE"
+    assert fields["mailing_address"] == "PO BOX 123"
+    assert fields["just_value"] == "450000"
+    assert fields["sale_price"] == "380000"
+    assert fields["year_built"] == "1985"
+    assert fields["property_type"] == "Single Family"
+
+
+def test_pa_row_has_homestead_true_for_homestead_column():
+    pa_row = {"Homestead": "25000", "Situs Address": "100 MAIN ST", "Mailing Address": "100 MAIN ST"}
+    assert SarasotaScraper._pa_row_has_homestead(pa_row) is True
+
+
+def test_pa_row_has_homestead_true_for_matching_addresses():
+    pa_row = {"Situs Address": "100 MAIN ST SARASOTA FL", "Mailing Address": "100 MAIN ST SARASOTA FL"}
+    assert SarasotaScraper._pa_row_has_homestead(pa_row) is True
+
+
+def test_pa_row_has_homestead_false_for_investor():
+    pa_row = {
+        "Homestead": "0",
+        "Situs Address": "100 MAIN ST SARASOTA FL",
+        "Mailing Address": "PO BOX 9999 SOMEWHERE TX",
+    }
+    assert SarasotaScraper._pa_row_has_homestead(pa_row) is False
+
+
+def test_fetch_balloon_prospects_v2_routes_via_fetch_records(monkeypatch):
+    scraper = SarasotaScraper(headless=True)
+    called = []
+
+    def _fake_v2(max_results):
+        called.append(max_results)
+        return [
+            PropertyRecord(
+                owner_name="MCGREGOR CHARLES W",
+                county="Sarasota",
+                lead_type=LeadType.BALLOON_PROSPECTS.value,
+                instrument_number="2020001001",
+            )
+        ]
+
+    monkeypatch.setattr(scraper, "_fetch_balloon_prospects_v2", _fake_v2)
+    records = scraper.fetch_records(LeadType.BALLOON_PROSPECTS, max_results=10)
+    assert called == [10]
+    assert len(records) == 1
+    assert records[0].lead_type == LeadType.BALLOON_PROSPECTS.value
+
+
+def test_fetch_mortgage_mod_v2_routes_via_fetch_records(monkeypatch):
+    scraper = SarasotaScraper(headless=True)
+    called = []
+
+    def _fake_v2(max_results):
+        called.append(max_results)
+        return [
+            PropertyRecord(
+                owner_name="HECHT LEONARD",
+                county="Sarasota",
+                lead_type=LeadType.MORTGAGE_MOD.value,
+                instrument_number="2023005001",
+            )
+        ]
+
+    monkeypatch.setattr(scraper, "_fetch_mortgage_mod_v2", _fake_v2)
+    records = scraper.fetch_records(LeadType.MORTGAGE_MOD, max_results=7)
+    assert called == [7]
+    assert len(records) == 1
+    assert records[0].lead_type == LeadType.MORTGAGE_MOD.value
+
+
+def test_fetch_balloon_prospects_v2_skips_homestead_pa_rows(monkeypatch):
+    scraper = SarasotaScraper(headless=True)
+    page = _FakeLoopPage()
+
+    homestead_pa_row = {
+        "Owner 1": "HECHT LEONARD",
+        "Owner 2": "",
+        "Owner 3": "",
+        "Situs Address": "123 MAIN ST",
+        "Mailing Address": "123 MAIN ST",  # same address = homestead signal
+        "Account #": "0000000001",
+        "Just Value": "300000",
+        "Assessed Value": "280000",
+        "Taxable Value": "250000",
+        "Last Sale Amount": "310000",
+        "Last Sale Date": "01/15/2020",
+        "Year Built": "1990",
+        "Description": "Single Family",
+    }
+
+    monkeypatch.setattr(scraper, "_build_pa_bulk_lookup", lambda: {"HECHT LEONARD": [homestead_pa_row]})
+    monkeypatch.setattr(scraper, "new_page", lambda: page)
+    monkeypatch.setattr(scraper, "_search_official_records", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        scraper,
+        "_parse_results",
+        lambda _page: [
+            {
+                "instrument_number": "2020001001",
+                "image_url": "",
+                "instrument_type": "MORTGAGE",
+                "rec_date": "01/15/2020",
+                "grantee": "COAST FEDERAL SAVINGS\nHECHT LEONARD",
+            }
+        ],
+    )
+
+    records = scraper._fetch_balloon_prospects_v2(max_results=5)
+    assert records == []
+
+
+def test_fetch_balloon_prospects_v2_includes_investor_pa_rows(monkeypatch):
+    scraper = SarasotaScraper(headless=True)
+    page = _FakeLoopPage()
+
+    investor_pa_row = {
+        "Owner 1": "HECHT LEONARD",
+        "Owner 2": "",
+        "Owner 3": "",
+        "Situs Address": "123 MAIN ST SARASOTA FL",
+        "Mailing Address": "PO BOX 9999 CHICAGO IL",  # different = investor
+        "Account #": "0000000002",
+        "Just Value": "400000",
+        "Assessed Value": "380000",
+        "Taxable Value": "360000",
+        "Last Sale Amount": "420000",
+        "Last Sale Date": "01/15/2020",
+        "Year Built": "1992",
+        "Description": "Single Family",
+    }
+
+    monkeypatch.setattr(scraper, "_build_pa_bulk_lookup", lambda: {"HECHT LEONARD": [investor_pa_row]})
+    monkeypatch.setattr(scraper, "new_page", lambda: page)
+    monkeypatch.setattr(scraper, "_search_official_records", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        scraper,
+        "_parse_results",
+        lambda _page: [
+            {
+                "instrument_number": "2020001002",
+                "image_url": "",
+                "instrument_type": "MORTGAGE",
+                "rec_date": "01/15/2020",
+                "grantee": "COAST FEDERAL SAVINGS\nHECHT LEONARD",
+            }
+        ],
+    )
+
+    records = scraper._fetch_balloon_prospects_v2(max_results=5)
+    assert len(records) == 1
+    assert records[0].owner_name == "HECHT LEONARD"
+    assert records[0].lead_type == LeadType.BALLOON_PROSPECTS.value
+    assert records[0].lead_source == "Sarasota Clerk Index + PA CSV"
+    assert "Est." in records[0].maturity_date
+    assert "2025" in records[0].maturity_date or "2027" in records[0].maturity_date

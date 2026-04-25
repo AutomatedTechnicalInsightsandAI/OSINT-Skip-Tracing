@@ -248,6 +248,28 @@ class SarasotaScraper(BaseScraper):
         "PRINCIPAL BALANCE DUE UPON MATURITY",
     }
 
+    # Fast Clerk-index pipelines (no PDF/OCR)
+    BALLOON_CLERK_DATE_FROM = "01/01/2018"
+    BALLOON_CLERK_DATE_TO = "12/31/2022"
+    MORTGAGE_MOD_CLERK_DATE_FROM = "01/01/2023"
+    EST_BALLOON_TERM_YEARS = (5, 7)  # est maturity = rec_year + 5 or rec_year + 7
+
+    # Lender name tokens — used to strip the lender line from the Clerk Name cell
+    LENDER_TOKENS = frozenset({
+        "BANK", "SAVINGS", "FEDERAL", "MORTGAGE CORP", "CREDIT UNION",
+        "FINANCIAL", "LENDING", "CAPITAL", "FUNDMISS", "FUND",
+        "INSURANCE", "MERITOR", "BARNETT", "COAST", "FIRST STATE",
+        "LOAN", "BANCORP", "BANKERS", "FARGO", "CHASE", "AMERICA",
+        "QUICKEN", "PENNYMAC", "LOANDEPOT", "NEWREZ", "LAKEVIEW",
+        "FREEDOM", "CALIBER", "FLAGSTAR", "GUARANTEED RATE",
+        "MOVEMENT", "PRIMELENDING", "SUNCOAST", "SEACOAST",
+        "REGIONS", "SUNTRUST", "TRUIST", "SYNOVUS", "TIAA",
+        "ASSOCIATION", "ASSOC", "ASSOCIATES", "NATIONAL",
+        "MUTUAL", "COMMUNITY", "COOPERATIVE",
+    })
+    PA_BULK_MIN_SALE_AMOUNT = "1"   # minimal filter to trigger PA export (all parcels)
+    PA_BULK_DATE_FROM = "01/01/2000"  # wide window to get full universe
+
     def __init__(self, headless: bool = False, timeout_ms: int = 30_000):
         super().__init__(headless=headless, timeout_ms=timeout_ms)
         self._mortgage_lookup_cache = self._load_mortgage_cache()
@@ -280,9 +302,9 @@ class SarasotaScraper(BaseScraper):
         if lead_type == LeadType.CASHOUT_REFI:
             return self._fetch_cashout_refi(max_results)
         if lead_type == LeadType.BALLOON_PROSPECTS:
-            return self._fetch_balloon_prospects(max_results)
+            return self._fetch_balloon_prospects_v2(max_results)
         if lead_type == LeadType.MORTGAGE_MOD:
-            return self._fetch_mortgage_mod_standalone(max_results)
+            return self._fetch_mortgage_mod_v2(max_results)
         return []
 
     # ------------------------------------------------------------------
@@ -1233,6 +1255,300 @@ class SarasotaScraper(BaseScraper):
         except (ValueError, ZeroDivisionError):
             pass
         return "Mortgage Mod – Review for Refi"
+
+    @classmethod
+    def _extract_borrower_from_name_cell(cls, name_cell: str) -> str:
+        """
+        The Clerk Name cell contains lender on line 1, borrower(s) on subsequent lines.
+        Strip any line that looks like a lender and join remaining lines with ' & '.
+        """
+        lines = [s for line in (name_cell or "").replace(";", "\n").splitlines() if (s := line.strip())]
+        borrower_lines = []
+        for line in lines:
+            upper = line.upper()
+            if any(tok in upper for tok in cls.LENDER_TOKENS):
+                continue
+            borrower_lines.append(line)
+        return " & ".join(borrower_lines).strip()
+
+    def _build_pa_bulk_lookup(self) -> dict[str, list[dict]]:
+        """
+        Pull the Sarasota PA bulk CSV export (all parcels, no date/price filter)
+        and return a dict: normalized_owner_name -> [pa_row, ...].
+
+        Uses the same POST→qid→CSV export pattern as _fetch_recent_sales_from_pa.
+        This is ONE HTTP call for ~500+ rows, used as an in-memory lookup table
+        so we never need per-owner HTTP calls.
+        """
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/122.0.0.0 Safari/537.36"
+            )
+        }
+        payload = {
+            "SalesFrom": self.PA_BULK_DATE_FROM,
+            "SalesTo": datetime.now().strftime("%m/%d/%Y"),
+            "SaleAmountFrom": self.PA_BULK_MIN_SALE_AMOUNT,
+            "PageSize": "1000",
+        }
+        try:
+            resp = requests.post(self.PA_RESULT_URL, data=payload, timeout=30, headers=headers)
+            resp.raise_for_status()
+        except Exception as exc:
+            logger.warning("PA bulk lookup POST failed: %s", repr(exc))
+            return {}
+
+        qid = parse_qs(urlparse(resp.url).query).get("qid", [""])[0]
+        if not qid:
+            logger.warning("PA bulk lookup: no qid in response URL")
+            return {}
+
+        try:
+            export = requests.get(self.PA_EXPORT_URL.format(qid=qid), timeout=60, headers=headers)
+            export.raise_for_status()
+        except Exception as exc:
+            logger.warning("PA bulk lookup export failed: %s", repr(exc))
+            return {}
+
+        csv_text = export.text.lstrip("\ufeff")
+        csv_lines = csv_text.splitlines()
+        if csv_lines and csv_lines[0].startswith("NOTE:"):
+            csv_text = "\n".join(csv_lines[1:])
+
+        lookup: dict[str, list[dict]] = {}
+        for row in csv.DictReader(io.StringIO(csv_text)):
+            owners = [
+                (row.get("Owner 1", "") or "").strip(),
+                (row.get("Owner 2", "") or "").strip(),
+                (row.get("Owner 3", "") or "").strip(),
+            ]
+            for owner in owners:
+                if not owner:
+                    continue
+                key = self._normalize_owner_match_text(owner)
+                if key:
+                    lookup.setdefault(key, []).append(row)
+        logger.info("PA bulk lookup built: %d unique owner keys", len(lookup))
+        return lookup
+
+    def _match_pa_row(self, borrower_name: str, pa_lookup: dict[str, list[dict]]) -> dict | None:
+        """
+        Find the best matching PA row for a Clerk borrower name.
+        First tries exact normalized key match, then falls back to
+        checking if any lookup key starts with the first two tokens of the borrower name.
+        Returns the first matching PA row or None.
+        """
+        if not borrower_name:
+            return None
+        normalized = self._normalize_owner_match_text(borrower_name)
+        if normalized in pa_lookup:
+            return pa_lookup[normalized][0]
+        tokens = normalized.split()
+        if len(tokens) >= 2:
+            prefix = " ".join(tokens[:2])
+            for key, rows in pa_lookup.items():
+                if key.startswith(prefix):
+                    return rows[0]
+        return None
+
+    @classmethod
+    def _pa_row_to_record_fields(cls, pa_row: dict) -> dict:
+        """Extract PropertyRecord-compatible fields from a PA bulk CSV row."""
+        owners = [
+            (pa_row.get("Owner 1", "") or "").strip(),
+            (pa_row.get("Owner 2", "") or "").strip(),
+            (pa_row.get("Owner 3", "") or "").strip(),
+        ]
+        owner_name = " & ".join(o for o in owners if o)
+        return {
+            "owner_name": owner_name,
+            "property_address": (pa_row.get("Situs Address", "") or "").strip(),
+            "mailing_address": (pa_row.get("Mailing Address", "") or "").strip(),
+            "parcel_id": cls.normalize_parcel_id(pa_row.get("Account #", "")),
+            "just_value": cls._clean_currency(pa_row.get("Just Value", "")),
+            "assessed_value": cls._clean_currency(pa_row.get("Assessed Value", "")),
+            "taxable_value": cls._clean_currency(pa_row.get("Taxable Value", "")),
+            "sale_price": cls._clean_currency(pa_row.get("Last Sale Amount", "")),
+            "last_sale_date": (pa_row.get("Last Sale Date", "") or "").strip(),
+            "year_built": (pa_row.get("Year Built", "") or "").strip(),
+            "property_type": (pa_row.get("Description", "") or "").strip(),
+        }
+
+    @staticmethod
+    def _pa_row_has_homestead(pa_row: dict) -> bool:
+        """
+        Return True if the PA CSV row indicates a homestead exemption.
+        Checks multiple possible column names used by the Sarasota PA export.
+        Falls back to mailing address == situs address as a secondary signal.
+        """
+        for col in ("Homestead", "Homestead Exemption", "Total Exemption", "Exemption Amount", "Exemption"):
+            val = (pa_row.get(col, "") or "").strip()
+            if val and val not in ("0", "0.00", "$0", "$0.00", "N", "NO", "FALSE", ""):
+                return True
+        # Secondary signal: owner lives at the property (not an investor)
+        situs = " ".join((pa_row.get("Situs Address", "") or "").upper().replace(",", " ").split())
+        mailing = " ".join((pa_row.get("Mailing Address", "") or "").upper().replace(",", " ").split())
+        if situs and mailing and situs == mailing:
+            return True
+        return False
+
+    def _fetch_balloon_prospects_v2(self, max_results: int) -> List[PropertyRecord]:
+        """
+        Fast balloon pipeline: Clerk index (MORTGAGE, 2018–2022) + PA bulk CSV lookup.
+        No PDF download. No OCR. Estimated maturity = rec_year + 5 or 7.
+        Filters to investors only (no homestead exemption).
+        """
+        pa_lookup = self._build_pa_bulk_lookup()
+        records: List[PropertyRecord] = []
+        seen_instruments: set[str] = set()
+
+        try:
+            page = self.new_page()
+            self._search_official_records(
+                page,
+                "MORTGAGE",
+                self.BALLOON_CLERK_DATE_FROM,
+                self.BALLOON_CLERK_DATE_TO,
+            )
+            rows = self._parse_results(page)
+            page.context.close()
+        except Exception as exc:
+            logger.error("Balloon v2: Clerk search failed: %s", repr(exc))
+            return records
+
+        logger.info("Balloon v2: Clerk returned %d index rows", len(rows))
+
+        for row in rows:
+            if len(records) >= max_results:
+                break
+
+            instrument_number = row.get("instrument_number", "").strip()
+            if not instrument_number or instrument_number in seen_instruments:
+                continue
+            seen_instruments.add(instrument_number)
+
+            rec_date_str = row.get("rec_date", "").strip()
+            rec_dt = parse_record_date(rec_date_str)
+            if not rec_dt:
+                continue
+
+            borrower_name = self._extract_borrower_from_name_cell(row.get("grantee", ""))
+            if not borrower_name:
+                continue
+
+            est_maturity_years = [rec_dt.year + y for y in self.EST_BALLOON_TERM_YEARS]
+            est_maturity_str = " or ".join(str(y) for y in est_maturity_years)
+
+            pa_row = self._match_pa_row(borrower_name, pa_lookup)
+            if pa_row:
+                if self._pa_row_has_homestead(pa_row):
+                    continue
+                fields = self._pa_row_to_record_fields(pa_row)
+            else:
+                fields = {"owner_name": borrower_name}
+
+            record = PropertyRecord(
+                owner_name=fields.get("owner_name") or borrower_name,
+                property_address=fields.get("property_address", ""),
+                mailing_address=fields.get("mailing_address", ""),
+                last_sale_date=fields.get("last_sale_date") or rec_date_str,
+                estimated_interest_rate=estimate_interest_rate(rec_date_str),
+                county=self.county_name,
+                deed_type=row.get("instrument_type", ""),
+                lead_type=LeadType.BALLOON_PROSPECTS.value,
+                instrument_number=instrument_number,
+                parcel_id=fields.get("parcel_id", ""),
+                just_value=fields.get("just_value", ""),
+                assessed_value=fields.get("assessed_value", ""),
+                taxable_value=fields.get("taxable_value", ""),
+                sale_price=fields.get("sale_price", ""),
+                year_built=fields.get("year_built", ""),
+                property_type=fields.get("property_type", ""),
+                maturity_date=f"Est. {est_maturity_str}",
+                lead_source="Sarasota Clerk Index + PA CSV",
+                notes=f"Mortgage recorded {rec_date_str}. Est. balloon maturity: {est_maturity_str}.",
+            )
+            records.append(record)
+
+        logger.info("Balloon v2: produced %d leads", len(records))
+        return records
+
+    def _fetch_mortgage_mod_v2(self, max_results: int) -> List[PropertyRecord]:
+        """
+        Fast mortgage-mod pipeline: Clerk index (MORTGAGE MOD AGREEMT, 2023–today)
+        + PA bulk CSV lookup. No PDF. No OCR.
+        Filters to investors only (no homestead exemption).
+        """
+        pa_lookup = self._build_pa_bulk_lookup()
+        records: List[PropertyRecord] = []
+        seen_instruments: set[str] = set()
+
+        date_to = datetime.now().strftime("%m/%d/%Y")
+
+        try:
+            page = self.new_page()
+            self._search_official_records(
+                page,
+                "MORTGAGE MOD AGREEMT",
+                self.MORTGAGE_MOD_CLERK_DATE_FROM,
+                date_to,
+            )
+            rows = self._parse_results(page)
+            page.context.close()
+        except Exception as exc:
+            logger.error("Mortgage mod v2: Clerk search failed: %s", repr(exc))
+            return records
+
+        logger.info("Mortgage mod v2: Clerk returned %d index rows", len(rows))
+
+        for row in rows:
+            if len(records) >= max_results:
+                break
+
+            instrument_number = row.get("instrument_number", "").strip()
+            if not instrument_number or instrument_number in seen_instruments:
+                continue
+            seen_instruments.add(instrument_number)
+
+            rec_date_str = row.get("rec_date", "").strip()
+            borrower_name = self._extract_borrower_from_name_cell(row.get("grantee", ""))
+            if not borrower_name:
+                continue
+
+            pa_row = self._match_pa_row(borrower_name, pa_lookup)
+            if pa_row:
+                if self._pa_row_has_homestead(pa_row):
+                    continue
+                fields = self._pa_row_to_record_fields(pa_row)
+            else:
+                fields = {"owner_name": borrower_name}
+
+            record = PropertyRecord(
+                owner_name=fields.get("owner_name") or borrower_name,
+                property_address=fields.get("property_address", ""),
+                mailing_address=fields.get("mailing_address", ""),
+                last_sale_date=fields.get("last_sale_date") or rec_date_str,
+                estimated_interest_rate=estimate_interest_rate(rec_date_str),
+                county=self.county_name,
+                deed_type=row.get("instrument_type", ""),
+                lead_type=LeadType.MORTGAGE_MOD.value,
+                instrument_number=instrument_number,
+                parcel_id=fields.get("parcel_id", ""),
+                just_value=fields.get("just_value", ""),
+                assessed_value=fields.get("assessed_value", ""),
+                taxable_value=fields.get("taxable_value", ""),
+                sale_price=fields.get("sale_price", ""),
+                year_built=fields.get("year_built", ""),
+                property_type=fields.get("property_type", ""),
+                lead_source="Sarasota Clerk Index + PA CSV",
+                notes=f"Mortgage modification recorded {rec_date_str}. Prior loan modified — prime refi candidate.",
+            )
+            records.append(record)
+
+        logger.info("Mortgage mod v2: produced %d leads", len(records))
+        return records
 
     def _fetch_mortgage_mod_standalone(self, max_results: int) -> List[PropertyRecord]:
         """Fetch Sarasota mortgage mod leads from 1/1/2025 through today as a standalone lead type."""
