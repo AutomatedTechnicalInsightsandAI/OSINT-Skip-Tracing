@@ -78,6 +78,8 @@ class SarasotaScraper(BaseScraper):
     MATURING_SCAN_LIMIT_MULTIPLIER = 12
     MATURING_SCAN_MINIMUM = 60
     BALLOON_SCAN_TARGET = 1000
+    BALLOON_MATURITY_MIN_YEARS = 5  # est. balloon maturity lower bound (rec_year + 5)
+    BALLOON_MATURITY_MAX_YEARS = 7  # est. balloon maturity upper bound (rec_year + 7)
     MIN_BALLOON_BALANCE = 80_000
     PDF_DOWNLOAD_DELAY_SECONDS = 3.0
     PDF_DOWNLOAD_MAX_RETRIES = 3
@@ -2658,7 +2660,10 @@ class SarasotaScraper(BaseScraper):
                 if not rec_dt:
                     continue
                 rec_year = rec_dt.year
-                est_maturity_years = [rec_year + 5, rec_year + 7]
+                est_maturity_years = [
+                    rec_year + self.BALLOON_MATURITY_MIN_YEARS,
+                    rec_year + self.BALLOON_MATURITY_MAX_YEARS,
+                ]
                 if not any(y in balloon_window for y in est_maturity_years):
                     continue
 
@@ -2695,11 +2700,16 @@ class SarasotaScraper(BaseScraper):
                     deed_type=row.get("instrument_type", ""),
                     lead_type=LeadType.BALLOON_PROSPECTS.value,
                     instrument_number=instrument_number,
-                    maturity_date=f"Est. {rec_year + 5}\u2013{rec_year + 7}",
+                    maturity_date=(
+                        f"Est. {rec_year + self.BALLOON_MATURITY_MIN_YEARS}"
+                        f"\u2013{rec_year + self.BALLOON_MATURITY_MAX_YEARS}"
+                    ),
                     lead_source="Sarasota Clerk Index + PA Bulk CSV",
                     notes=(
                         f"Mortgage recorded {row.get('rec_date', '')}; "
-                        f"est. balloon maturity {rec_year + 5}\u2013{rec_year + 7}"
+                        f"est. balloon maturity "
+                        f"{rec_year + self.BALLOON_MATURITY_MIN_YEARS}"
+                        f"\u2013{rec_year + self.BALLOON_MATURITY_MAX_YEARS}"
                     ),
                     absentee_owner="True" if pa_row is not None else "",
                 )
