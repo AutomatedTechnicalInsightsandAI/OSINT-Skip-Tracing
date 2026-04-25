@@ -280,6 +280,16 @@ class DataProcessor:
         df["Lead Score"] = df.apply(self._score_lead, axis=1)
         df["Lead Source"] = df.get("Lead Source", pd.Series(["OSINT Scraper"] * len(df))).fillna("OSINT Scraper")
 
+        # DSCR ratio (parse from Notes field if present)
+        def _parse_dscr_from_notes(note_str: str) -> float:
+            m = re.search(r"Est\. DSCR:\s*([\d.]+)", str(note_str))
+            return float(m.group(1)) if m else float("nan")
+
+        if "Notes" in df.columns:
+            df["DSCR Ratio"] = df["Notes"].apply(_parse_dscr_from_notes)
+        else:
+            df["DSCR Ratio"] = pd.NA
+
         drop_cols = list(numeric_map.values())
         return df.drop(columns=[col for col in drop_cols if col in df.columns])
 
@@ -289,6 +299,8 @@ class DataProcessor:
             return LeadType.CASHOUT_REFI.value
         if row.get("Lead Type", "") == LeadType.MORTGAGE_MOD.value:
             return LeadType.MORTGAGE_MOD.value
+        if row.get("Lead Type", "") == LeadType.DSCR.value:
+            return LeadType.DSCR.value
         if row.get("Lead Type", "") == LeadType.BALLOON_PROSPECTS.value:
             return row.get("Lead Type", "")
         if bool(row.get("Maturing Loan Candidate", False)):
@@ -323,6 +335,17 @@ class DataProcessor:
             score += 25
         if bool(row.get("Equity Rich Candidate", False)):
             score += 25
+
+        dscr_ratio = row.get("DSCR Ratio")
+        if pd.notna(dscr_ratio):
+            try:
+                ratio = float(dscr_ratio)
+                if ratio >= 1.25:
+                    score += 20
+                elif ratio >= 1.0:
+                    score += 10
+            except (ValueError, TypeError):
+                pass
 
         equity_pct = row.get("Est Equity Pct")
         if pd.notna(equity_pct):
@@ -429,6 +452,7 @@ class DataProcessor:
             "Transfer Velocity Candidate",
             "DSCR Prospect",
             "Equity Rich Candidate",
+            "DSCR Ratio",
             "PDF Extraction Method",
             "View Image URL",
             "Lead Source",
