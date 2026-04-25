@@ -33,6 +33,7 @@ class LeadType(str, Enum):
     BALLOON_PROSPECTS = "Commercial Balloon Prospects"
     TRUST_REFI = "Property Held in Trust Refi Prospects"
     MORTGAGE_MOD = "Mortgage Mod Refi Prospects"
+    DSCR = "DSCR Investor Prospects"
 
 
 @dataclass

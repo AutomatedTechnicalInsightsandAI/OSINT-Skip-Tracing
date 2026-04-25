@@ -63,6 +63,14 @@ class SarasotaScraper(BaseScraper):
     MORTGAGE_MOD_DATE_FROM = "01/01/2025"
     MORTGAGE_MOD_DATE_TO = None  # None means: use today's date at runtime
     CASHOUT_MIN_SALE_PRICE = 250_000
+    # DSCR scraper constants
+    DSCR_BATCH_SIZE = 500          # rows to pull from PA export per request
+    DSCR_MIN_VALUE = 150_000       # minimum Just Value to consider
+    DSCR_RENT_FACTOR = 0.0070      # estimated monthly rent as pct of Just Value (coastal FL benchmark)
+    DSCR_RATE = 0.07               # assumed note rate for payment calculation
+    DSCR_TERM_MONTHS = 360         # 30-year amortisation
+    DSCR_LTV = 0.75                # standard DSCR loan LTV
+    DSCR_MIN_RATIO = 1.0           # include ALL properties with DSCR >= 1.0 (no floor filter)
     MORTGAGE_LOOKBACK_DAYS = 7
     MORTGAGE_LOOKAHEAD_DAYS = 21
     CASHOUT_CANDIDATE_MULTIPLIER = 2
@@ -283,6 +291,8 @@ class SarasotaScraper(BaseScraper):
             return self._fetch_balloon_prospects(max_results)
         if lead_type == LeadType.MORTGAGE_MOD:
             return self._fetch_mortgage_mod_standalone(max_results)
+        if lead_type == LeadType.DSCR:
+            return self._fetch_dscr_prospects(max_results)
         return []
 
     # ------------------------------------------------------------------
@@ -1729,6 +1739,140 @@ class SarasotaScraper(BaseScraper):
             logger.error("Sarasota cash-out refi scrape failed: %s", repr(exc))
 
         return records
+
+    def _fetch_dscr_prospects(self, max_results: int) -> List[PropertyRecord]:
+        """Fetch DSCR investor prospect leads from the Sarasota PA CSV export.
+
+        Pulls up to DSCR_BATCH_SIZE rows from the PA export with a broad sale
+        amount filter (no date restriction beyond 01/01/2018 to catch the full
+        investor era).  No absentee-owner filter.  No interest-rate filter.
+        """
+        payload = {
+            "SalesFrom": "01/01/2018",
+            "SaleAmountFrom": str(self.DSCR_MIN_VALUE),
+            "PageSize": str(self.DSCR_BATCH_SIZE),
+        }
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/122.0.0.0 Safari/537.36"
+            )
+        }
+
+        try:
+            response = requests.post(
+                self.PA_RESULT_URL,
+                data=payload,
+                timeout=30,
+                headers=headers,
+            )
+            response.raise_for_status()
+        except Exception as exc:
+            logger.warning("Sarasota DSCR PA search failed: %s", repr(exc))
+            return []
+
+        qid = parse_qs(urlparse(response.url).query).get("qid", [""])[0]
+        if not qid:
+            logger.warning("Sarasota DSCR PA search returned no qid")
+            return []
+
+        try:
+            export_response = requests.get(
+                self.PA_EXPORT_URL.format(qid=qid),
+                timeout=60,
+                headers=headers,
+            )
+            export_response.raise_for_status()
+        except Exception as exc:
+            logger.warning("Sarasota DSCR PA CSV export failed: %s", repr(exc))
+            return []
+
+        csv_text = export_response.text.lstrip("\ufeff")
+        csv_lines = csv_text.splitlines()
+        if csv_lines and csv_lines[0].startswith("NOTE:"):
+            csv_text = "\n".join(csv_lines[1:])
+
+        reader = csv.DictReader(io.StringIO(csv_text))
+
+        # Pre-calculate amortisation constants
+        r = self.DSCR_RATE / 12
+        n = self.DSCR_TERM_MONTHS
+        amort_factor = (r * (1 + r) ** n) / ((1 + r) ** n - 1)
+
+        records: List[PropertyRecord] = []
+        seen_parcels: set[str] = set()
+
+        for row in reader:
+            parcel_id = self.normalize_parcel_id(row.get("Account #", ""))
+            if not parcel_id or parcel_id in seen_parcels:
+                continue
+
+            just_value_raw = self._to_float(row.get("Just Value", "") or "")
+            if just_value_raw < self.DSCR_MIN_VALUE:
+                continue
+
+            seen_parcels.add(parcel_id)
+
+            owners = [
+                (row.get("Owner 1", "") or "").strip(),
+                (row.get("Owner 2", "") or "").strip(),
+                (row.get("Owner 3", "") or "").strip(),
+            ]
+            owner_name = " & ".join([o for o in owners if o])
+            property_address = (row.get("Situs Address", "") or "").strip()
+            mailing_address = (row.get("Mailing Address", "") or "").strip()
+            just_value = self._clean_currency(row.get("Just Value", ""))
+            assessed_value = self._clean_currency(row.get("Assessed Value", ""))
+            taxable_value = self._clean_currency(row.get("Taxable Value", ""))
+            year_built = (row.get("Year Built", "") or "").strip()
+            property_type = (row.get("Description", "") or "").strip()
+            sale_price_raw = self._to_float(row.get("Last Sale Amount", "") or "")
+            sale_price = str(int(round(sale_price_raw))) if sale_price_raw > 0 else ""
+
+            # DSCR calculations
+            est_monthly_rent = just_value_raw * self.DSCR_RENT_FACTOR
+            loan_amount = just_value_raw * self.DSCR_LTV
+            monthly_payment = loan_amount * amort_factor
+            dscr = round(est_monthly_rent / monthly_payment, 2) if monthly_payment > 0 else float("nan")
+
+            # Compute absentee flag (informational only — NOT used as a filter)
+            absentee_owner = str(
+                mailing_address.strip().upper() != property_address.strip().upper()
+            )
+
+            notes = (
+                f"Est. DSCR: {dscr:.2f} | "
+                f"Est. Rent: ${est_monthly_rent:,.0f}/mo | "
+                f"Loan: ${loan_amount:,.0f} @ {self.DSCR_RATE * 100:.1f}%"
+            ) if not (isinstance(dscr, float) and dscr != dscr) else (
+                f"Est. Rent: ${est_monthly_rent:,.0f}/mo | "
+                f"Loan: ${loan_amount:,.0f} @ {self.DSCR_RATE * 100:.1f}% | DSCR: N/A"
+            )
+
+            records.append(
+                PropertyRecord(
+                    owner_name=owner_name,
+                    property_address=property_address,
+                    mailing_address=mailing_address,
+                    county=self.county_name,
+                    lead_type=LeadType.DSCR.value,
+                    lead_source="Sarasota PA Export",
+                    parcel_id=parcel_id,
+                    sale_price=sale_price,
+                    just_value=just_value,
+                    assessed_value=assessed_value,
+                    taxable_value=taxable_value,
+                    year_built=year_built,
+                    property_type=property_type,
+                    absentee_owner=absentee_owner,
+                    estimated_interest_rate=f"~{self.DSCR_RATE * 100:.2f}% (DSCR assumed rate)",
+                    notes=notes,
+                )
+            )
+
+        logger.info("Sarasota DSCR: pulled %d leads from PA export", len(records))
+        return records[:max_results]
 
     def _fetch_recent_sales_from_pa(self) -> list[dict]:
         """Use Sarasota PA advanced search/export for target-window sales over the price floor."""

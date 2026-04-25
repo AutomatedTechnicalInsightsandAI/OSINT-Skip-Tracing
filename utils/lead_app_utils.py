@@ -47,6 +47,13 @@ LEAD_TYPE_HELP = {
         "balloon/HELOC signals. These borrowers already had a modification — they "
         "are prime candidates for a full refinance."
     ),
+    LeadType.DSCR: (
+        "Investment properties in Sarasota County with strong DSCR (Debt Service Coverage Ratio). "
+        "Pulls from the Sarasota Property Appraiser export — **no absentee or interest-rate filters** — "
+        "so you see the full universe of income-property candidates. DSCR is estimated using "
+        "a 0.70%/month rent factor and 75% LTV at 7.00% / 30yr. Sort by 'DSCR Ratio' descending "
+        "to prioritise the strongest cash-flowing deals."
+    ),
 }
 
 OUTREACH_PRIORITY_COLUMNS = [
@@ -105,6 +112,13 @@ def _lead_state_meta(lead_type: LeadType) -> dict[str, str]:
             "partial_key": "mortgage_mod_partial_df",
             "saved_csv_key": "mortgage_mod_saved_csv_path",
             "label": "mortgage_mod_refi",
+        }
+    if lead_type == LeadType.DSCR:
+        return {
+            "results_key": "dscr_results_df",
+            "partial_key": "dscr_partial_df",
+            "saved_csv_key": "dscr_saved_csv_path",
+            "label": "dscr_investor",
         }
     safe_name = lead_type.name.lower()
     return {
